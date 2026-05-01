@@ -1,20 +1,14 @@
-/**
- * Bot Heartbeat — Admin paneline bot'un online olduğunu bildirir.
- * 60 saniyede bir veritabanındaki bot_heartbeat tablosunu günceller.
- */
-
 const prisma = require('./db');
 
 async function sendHeartbeat() {
   try {
-    await prisma.$executeRaw`
-      INSERT INTO bot_heartbeat (id, "lastSeen", status)
-      VALUES ('singleton', NOW(), 'online')
-      ON CONFLICT (id) DO UPDATE SET "lastSeen" = NOW(), status = 'online'
-    `;
+    await prisma.botHeartbeat.upsert({
+      where: { id: 'singleton' },
+      update: { lastSeen: new Date(), status: 'online' },
+      create: { id: 'singleton', lastSeen: new Date(), status: 'online' },
+    });
   } catch (err) {
-    // Tablo yoksa sessizce geç (admin paneli oluşturacak)
-    console.warn('[HEARTBEAT] Table may not exist yet:', err.message);
+    console.warn('[HEARTBEAT] Error:', err.message);
   }
 }
 

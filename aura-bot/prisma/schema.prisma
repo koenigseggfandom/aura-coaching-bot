@@ -97,3 +97,10 @@ model AutoRegisterQueue {
 
   @@map("auto_register_queue")
 }
+model BotHeartbeat {
+  id       String   @id @default("singleton")
+  lastSeen DateTime @default(now())
+  status   String   @default("online")
+
+  @@map("bot_heartbeat")
+}
