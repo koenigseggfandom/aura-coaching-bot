@@ -1,0 +1,99 @@
+// This is your Prisma schema file.
+// AURA Coaching Bot - Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Student {
+  id              String   @id @default(cuid())
+  discordId       String   @unique
+  discordUsername String?
+  name            String
+  surname         String
+  age             Int?
+  country         String?
+  rank            String?
+  targetRank      String?
+  trackerLink     String?
+  expectations    String?
+  introduction    String?
+  availability    String?
+  isActive        Boolean  @default(true)
+  totalLessons    Int      @default(0)
+  remainingLessons Int     @default(0)
+  packageType     String?
+  registeredAt    DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  lessons         Lesson[]
+
+  @@map("students")
+}
+
+model Lesson {
+  id           String   @id @default(cuid())
+  lessonNumber Int
+  studentId    String
+  student      Student  @relation(fields: [studentId], references: [id])
+  coachId      String   // Discord ID of coach
+  coachUsername String?
+  category     String   // VOD, GAMESENSE, MOVEMENT, AIM
+  channelName  String?
+  startedAt    DateTime
+  endedAt      DateTime?
+  durationMins Int?
+  notes        String?
+  isAutomatic  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@map("lessons")
+}
+
+model Coach {
+  id            String   @id @default(cuid())
+  discordId     String   @unique
+  discordUsername String?
+  name          String?
+  isActive      Boolean  @default(true)
+  totalLessons  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("coaches")
+}
+
+model VoiceSession {
+  id          String   @id @default(cuid())
+  studentId   String
+  coachId     String
+  channelId   String
+  channelName String?
+  category    String
+  joinedAt    DateTime @default(now())
+  leftAt      DateTime?
+  isActive    Boolean  @default(true)
+
+  @@map("voice_sessions")
+}
+
+model AutoRegisterQueue {
+  id          String   @id @default(cuid())
+  name        String
+  surname     String
+  discordTag  String?  // username#discriminator or just username (new system)
+  discordId   String?  // filled after match
+  packageType String?
+  rank        String?
+  targetRank  String?
+  createdAt   DateTime @default(now())
+  processed   Boolean  @default(false)
+  processedAt DateTime?
+
+  @@map("auto_register_queue")
+}
