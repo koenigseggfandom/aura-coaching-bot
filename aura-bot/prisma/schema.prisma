@@ -33,7 +33,7 @@ model Student {
 
   lessons         Lesson[]
 
-  @@map("students")
+  @@map("bot_students")
 }
 
 model Lesson {
@@ -65,7 +65,7 @@ model Coach {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  @@map("coaches")
+  @@map("bot_coaches")
 }
 
 model VoiceSession {
