@@ -33,10 +33,31 @@ module.exports = {
       });
     }
 
-    const embed = studentCard(student, student.lessons);
+    // Güvenli değerler — negatife düşmesin
+    const safeTotal = Math.max(0, student.totalLessons || 0);
+    const safeRemaining = Math.max(0, student.remainingLessons || 0);
+    const safeCompleted = Math.max(0, safeTotal - safeRemaining);
+
+    // Gerekirse DB'yi düzelt
+    if (student.totalLessons < 0 || student.remainingLessons < 0) {
+      await prisma.student.update({
+        where: { id: student.id },
+        data: {
+          totalLessons: safeTotal,
+          remainingLessons: safeRemaining,
+        },
+      }).catch(() => {});
+    }
+
+    const fixedStudent = {
+      ...student,
+      totalLessons: safeTotal,
+      remainingLessons: safeRemaining,
+    };
+
+    const embed = studentCard(fixedStudent, student.lessons);
     embed.setThumbnail(target.displayAvatarURL({ size: 256 }));
 
-    // Add lesson history if exists
     if (student.lessons.length > 0) {
       const { CATEGORY_EMOJIS } = require('../utils/embeds');
       const lessonLines = student.lessons.map(l => {
