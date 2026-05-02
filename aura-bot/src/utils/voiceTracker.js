@@ -1,24 +1,21 @@
 /**
- * Voice Session Tracker
- * Tracks students in voice channels and counts lessons automatically.
- * Channel categories: VOD, GAMESENSE, MOVEMENT, AIM
- * Each category has 3 channels (e.g. "VOD 1", "VOD 2", "VOD 3")
- * 
- * 15-minute grace period: if student drops and rejoins within 15 min,
- * the session continues. Otherwise, +1 new lesson.
+ * Voice Session Tracker v2
+ * - Oturum hem ogrenci hem koc girince baslar
+ * - Koc kanala girdiginde zaten icerde ogrenci varsa oturum baslatilir
+ * - Ogrenci girdiginde zaten icerde koc varsa oturum baslatilir
+ * - 15 dakika grace period
+ * - Min 5 dakika ders sayilir
  */
 
 const prisma = require('./db');
 
-// Map to track active voice sessions: studentDiscordId -> session info
 const activeSessions = new Map();
-// Map to track grace period timeouts: studentDiscordId -> timeout
 const gracePeriods = new Map();
 
 const LESSON_LOG_CHANNEL = process.env.LESSON_LOG_CHANNEL_ID;
-const GRACE_PERIOD_MS = 15 * 60 * 1000; // 15 minutes
+const GRACE_PERIOD_MS = 15 * 60 * 1000;
+const MIN_LESSON_MINS = 5;
 
-// Channel category detection
 const CHANNEL_CATEGORIES = ['VOD', 'GAMESENSE', 'MOVEMENT', 'AIM'];
 
 function detectCategory(channelName) {
@@ -34,71 +31,67 @@ function isCoachingChannel(channelName) {
   return detectCategory(channelName) !== null;
 }
 
-async function getStudentAndCoach(guild, channel) {
-  const members = [...channel.members.values()];
+function memberIsCoach(member) {
   const coachRoleId = process.env.COACH_ROLE_ID;
+  if (!coachRoleId) return false;
+  return member.roles.cache.has(coachRoleId);
+}
 
-  let coach = null;
-  let student = null;
+async function memberIsStudent(member) {
+  try {
+    return await prisma.student.findUnique({ where: { discordId: member.id } });
+  } catch { return null; }
+}
+
+async function tryStartSession(guild, channel) {
+  const members = [...channel.members.values()].filter(m => !m.user.bot);
+
+  let coachMember = null;
+  let studentMember = null;
+  let dbStudent = null;
 
   for (const member of members) {
-    const isCoach = coachRoleId
-      ? member.roles.cache.has(coachRoleId)
-      : false;
-    if (isCoach) {
-      coach = member;
+    if (memberIsCoach(member)) {
+      coachMember = member;
     } else {
-      // Check if this member is a registered student
-      const dbStudent = await prisma.student.findUnique({
-        where: { discordId: member.id },
-      }).catch(() => null);
-      if (dbStudent) {
-        student = { member, dbStudent };
-      }
+      const db = await memberIsStudent(member);
+      if (db) { studentMember = member; dbStudent = db; }
     }
   }
 
-  return { coach, student };
-}
+  if (!coachMember || !studentMember || !dbStudent) return;
+  if (activeSessions.has(studentMember.id)) return;
 
-async function startSession(client, guild, member, channel) {
+  if (gracePeriods.has(studentMember.id)) {
+    const gp = gracePeriods.get(studentMember.id);
+    clearTimeout(gp.timeout);
+    gracePeriods.delete(studentMember.id);
+    activeSessions.set(studentMember.id, gp.session);
+    console.log(`[VOICE] ${studentMember.user.username} grace period'dan dondu`);
+    return;
+  }
+
   const category = detectCategory(channel.name);
   if (!category) return;
 
-  const dbStudent = await prisma.student.findUnique({
-    where: { discordId: member.id },
-  }).catch(() => null);
-
-  if (!dbStudent) return;
-
-  // Check for coach in channel
-  const coachRoleId = process.env.COACH_ROLE_ID;
-  let coachMember = null;
-  for (const [, m] of channel.members) {
-    if (m.id !== member.id && coachRoleId && m.roles.cache.has(coachRoleId)) {
-      coachMember = m;
-      break;
-    }
-  }
-
   const session = {
     studentId: dbStudent.id,
-    studentDiscordId: member.id,
-    coachId: coachMember?.id || 'unknown',
-    coachUsername: coachMember?.user.username || 'unknown',
+    studentDiscordId: studentMember.id,
+    studentUsername: studentMember.user.username,
+    coachId: coachMember.id,
+    coachUsername: coachMember.user.username,
     channelId: channel.id,
     channelName: channel.name,
     category,
     startedAt: new Date(),
   };
 
-  activeSessions.set(member.id, session);
+  activeSessions.set(studentMember.id, session);
 
-  // Create voice_session record
   await prisma.voiceSession.create({
     data: {
       studentId: dbStudent.id,
-      coachId: coachMember?.id || 'unknown',
+      coachId: coachMember.id,
       channelId: channel.id,
       channelName: channel.name,
       category,
@@ -106,29 +99,30 @@ async function startSession(client, guild, member, channel) {
     },
   }).catch(console.error);
 
-  console.log(`[VOICE] Session started: ${member.user.username} in ${channel.name} (${category})`);
+  console.log(`[VOICE] Oturum basladi: ${studentMember.user.username} + Koc: ${coachMember.user.username} -> ${channel.name} (${category})`);
 }
 
-async function endSession(client, guild, member, wasGrace = false) {
-  const session = activeSessions.get(member.id);
+async function endSession(guild, studentDiscordId) {
+  const session = activeSessions.get(studentDiscordId);
   if (!session) return;
 
-  activeSessions.delete(member.id);
+  activeSessions.delete(studentDiscordId);
 
   const endedAt = new Date();
   const durationMins = Math.round((endedAt - session.startedAt) / 60000);
 
-  // Only count as lesson if at least 5 minutes
-  if (durationMins < 5) {
-    console.log(`[VOICE] Session too short (${durationMins}m), not counting: ${member.user.username}`);
+  if (durationMins < MIN_LESSON_MINS) {
+    console.log(`[VOICE] Cok kisa (${durationMins}dk), ders sayilmadi: ${session.studentUsername}`);
+    await prisma.voiceSession.updateMany({
+      where: { studentId: session.studentId, isActive: true },
+      data: { leftAt: endedAt, isActive: false },
+    }).catch(console.error);
     return;
   }
 
-  // Get current lesson count for this student
   const lessonCount = await prisma.lesson.count({ where: { studentId: session.studentId } });
   const lessonNumber = lessonCount + 1;
 
-  // Create lesson
   await prisma.lesson.create({
     data: {
       lessonNumber,
@@ -144,7 +138,6 @@ async function endSession(client, guild, member, wasGrace = false) {
     },
   }).catch(console.error);
 
-  // Update student totals
   await prisma.student.update({
     where: { id: session.studentId },
     data: {
@@ -153,47 +146,33 @@ async function endSession(client, guild, member, wasGrace = false) {
     },
   }).catch(console.error);
 
-  // Update voice_session record
   await prisma.voiceSession.updateMany({
-    where: {
-      studentId: session.studentId,
-      channelId: session.channelId,
-      isActive: true,
-    },
-    data: {
-      leftAt: endedAt,
-      isActive: false,
-    },
+    where: { studentId: session.studentId, isActive: true },
+    data: { leftAt: endedAt, isActive: false },
   }).catch(console.error);
 
-  // Log to channel
-  if (LESSON_LOG_CHANNEL) {
+  console.log(`[VOICE] Ders #${lessonNumber} sayildi: ${session.studentUsername}, ${durationMins}dk, ${session.category}`);
+
+  if (LESSON_LOG_CHANNEL && guild) {
     const logChannel = guild.channels.cache.get(LESSON_LOG_CHANNEL);
     if (logChannel) {
       const { EmbedBuilder } = require('discord.js');
-      const categoryColors = {
-        VOD: 0x6366f1,
-        GAMESENSE: 0xec4899,
-        MOVEMENT: 0x22c55e,
-        AIM: 0xf59e0b,
-      };
+      const catColors = { VOD: 0x6366f1, GAMESENSE: 0xec4899, MOVEMENT: 0x22c55e, AIM: 0xf59e0b };
       const embed = new EmbedBuilder()
-        .setColor(categoryColors[session.category] || 0x6366f1)
-        .setTitle(`📚 Ders #${lessonNumber} Tamamlandı`)
+        .setColor(catColors[session.category] || 0x6366f1)
+        .setTitle(`Ders #${lessonNumber} Tamamlandi`)
         .addFields(
-          { name: '👤 Öğrenci', value: `<@${session.studentDiscordId}>`, inline: true },
-          { name: '🎓 Koç', value: session.coachId !== 'unknown' ? `<@${session.coachId}>` : 'Bilinmiyor', inline: true },
-          { name: '📂 Kategori', value: session.category, inline: true },
-          { name: '⏱️ Süre', value: `${durationMins} dakika`, inline: true },
-          { name: '🔊 Kanal', value: session.channelName, inline: true },
-          { name: '🔢 Ders No', value: `#${lessonNumber}`, inline: true },
+          { name: 'Ogrenci', value: `<@${session.studentDiscordId}>`, inline: true },
+          { name: 'Koc', value: `<@${session.coachId}>`, inline: true },
+          { name: 'Kategori', value: session.category, inline: true },
+          { name: 'Sure', value: `${durationMins} dakika`, inline: true },
+          { name: 'Kanal', value: session.channelName, inline: true },
+          { name: 'Ders No', value: `#${lessonNumber}`, inline: true },
         )
         .setTimestamp();
       await logChannel.send({ embeds: [embed] }).catch(console.error);
     }
   }
-
-  console.log(`[VOICE] Lesson #${lessonNumber} counted: ${member.user.username}, ${durationMins}m, ${session.category}`);
 }
 
 async function handleVoiceUpdate(oldState, newState, client) {
@@ -204,52 +183,57 @@ async function handleVoiceUpdate(oldState, newState, client) {
   const oldChannel = oldState.channel;
   const newChannel = newState.channel;
 
-  const wasInCoachingChannel = oldChannel && isCoachingChannel(oldChannel.name);
-  const isInCoachingChannel = newChannel && isCoachingChannel(newChannel.name);
+  const wasInCoaching = oldChannel && isCoachingChannel(oldChannel.name);
+  const isInCoaching = newChannel && isCoachingChannel(newChannel.name);
 
-  // Left a coaching channel
-  if (wasInCoachingChannel && !isInCoachingChannel) {
-    if (activeSessions.has(member.id)) {
-      // Start grace period
-      console.log(`[VOICE] Grace period started for ${member.user.username}`);
-      const timeout = setTimeout(async () => {
-        gracePeriods.delete(member.id);
-        await endSession(client, guild, member, false);
-      }, GRACE_PERIOD_MS);
-
-      gracePeriods.set(member.id, {
-        timeout,
-        session: activeSessions.get(member.id),
-      });
-    }
-  }
-
-  // Joined a coaching channel
-  if (isInCoachingChannel && !wasInCoachingChannel) {
-    // Cancel grace period if returning
+  // Kanala girdi
+  if (isInCoaching && !wasInCoaching) {
     if (gracePeriods.has(member.id)) {
       const gp = gracePeriods.get(member.id);
       clearTimeout(gp.timeout);
       gracePeriods.delete(member.id);
-      console.log(`[VOICE] ${member.user.username} returned within grace period, session continuing`);
-      // Restore active session (keeps original startedAt)
       activeSessions.set(member.id, gp.session);
-    } else {
-      // New session
-      await startSession(client, guild, member, newChannel);
+      console.log(`[VOICE] ${member.user.username} grace period icinde geri dondu`);
+      return;
+    }
+    await tryStartSession(guild, newChannel);
+  }
+
+  // Kanaldan cikti
+  if (wasInCoaching && !isInCoaching) {
+    const dbStudent = await memberIsStudent(member);
+
+    if (dbStudent && activeSessions.has(member.id)) {
+      // Ogrenci cikti — grace period
+      console.log(`[VOICE] Grace period basladi: ${member.user.username}`);
+      const session = activeSessions.get(member.id);
+      const timeout = setTimeout(async () => {
+        gracePeriods.delete(member.id);
+        await endSession(guild, member.id);
+      }, GRACE_PERIOD_MS);
+      gracePeriods.set(member.id, { timeout, session });
+    } else if (memberIsCoach(member)) {
+      // Koc cikti — kanalda ogrenci varsa oturumu bitir
+      if (oldChannel) {
+        for (const [, m] of oldChannel.members) {
+          if (activeSessions.has(m.id)) {
+            console.log(`[VOICE] Koc cikti, oturum bitiyor: ${m.user.username}`);
+            await endSession(guild, m.id);
+          }
+        }
+      }
     }
   }
 
-  // Switched between coaching channels (e.g. VOD 1 → VOD 2)
-  if (wasInCoachingChannel && isInCoachingChannel && oldChannel.id !== newChannel.id) {
-    // Update channel info in active session
+  // Farkli coaching kanala gecis
+  if (wasInCoaching && isInCoaching && oldChannel.id !== newChannel.id) {
     if (activeSessions.has(member.id)) {
       const session = activeSessions.get(member.id);
       session.channelId = newChannel.id;
       session.channelName = newChannel.name;
       session.category = detectCategory(newChannel.name) || session.category;
-      activeSessions.set(member.id, session);
     }
+    await tryStartSession(guild, newChannel);
   }
 }
 
