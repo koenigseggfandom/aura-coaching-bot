@@ -138,7 +138,7 @@ async function endSession(guild, studentDiscordId) {
     },
   }).catch(console.error);
 
-  await prisma.student.update({
+  const updatedStudent = await prisma.student.update({
     where: { id: session.studentId },
     data: {
       totalLessons: { increment: 1 },
@@ -150,6 +150,30 @@ async function endSession(guild, studentDiscordId) {
     where: { studentId: session.studentId, isActive: true },
     data: { leftAt: endedAt, isActive: false },
   }).catch(console.error);
+
+  // Kalan ders bitti veya sıfırın altına düştü — otomatik pasife al
+  if (updatedStudent && updatedStudent.remainingLessons <= 0 && updatedStudent.isActive) {
+    await prisma.student.update({
+      where: { id: session.studentId },
+      data:  { isActive: false },
+    }).catch(console.error);
+
+    console.log(`[VOICE] Kalan ders tükendi — ${session.studentUsername} otomatik pasife alındı`);
+
+    // Discord öğrenci rolünü kaldır
+    const studentRoleId = process.env.STUDENT_ROLE_ID;
+    if (studentRoleId && guild) {
+      try {
+        const member = await guild.members.fetch(session.studentDiscordId).catch(() => null);
+        if (member && member.roles.cache.has(studentRoleId)) {
+          await member.roles.remove(studentRoleId, 'Kalan ders tükendi — otomatik pasife alındı');
+          console.log(`[VOICE] ${session.studentUsername} öğrenci rolü kaldırıldı`);
+        }
+      } catch (e) {
+        console.error(`[VOICE] Rol kaldırma hatası (${session.studentUsername}):`, e.message);
+      }
+    }
+  }
 
   console.log(`[VOICE] Ders #${lessonNumber} sayildi: ${session.studentUsername}, ${durationMins}dk, ${session.category}`);
 
