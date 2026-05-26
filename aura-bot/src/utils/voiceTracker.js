@@ -141,7 +141,7 @@ async function endSession(guild, studentDiscordId) {
   const updatedStudent = await prisma.student.update({
     where: { id: session.studentId },
     data: {
-      totalLessons: { increment: 1 },
+      // totalLessons = paket büyüklüğü, SABIT — değiştirme
       remainingLessons: { decrement: 1 },
     },
   }).catch(console.error);
