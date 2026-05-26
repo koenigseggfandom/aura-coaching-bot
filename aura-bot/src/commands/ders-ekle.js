@@ -112,7 +112,7 @@ module.exports = {
     await prisma.student.update({
       where: { id: student.id },
       data: {
-        totalLessons:     { increment: 1 },
+        // totalLessons = paket büyüklüğü, SABIT — değiştirme
         remainingLessons: { decrement: 1 },
       },
     });
