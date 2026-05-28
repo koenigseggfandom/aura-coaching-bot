@@ -91,6 +91,38 @@ module.exports = {
     // Pasif öğrenciye ders eklemeye izin ver ama uyar
     const wasInactive = !student.isActive;
 
+    // Çift kayıt koruması: son 60 saniye içinde aynı öğrenci + kategori için ders eklendiyse engelle
+    const oneMinuteAgo = new Date(Date.now() - 60_000);
+    const recentLesson = await prisma.lesson.findFirst({
+      where: {
+        studentId:   student.id,
+        category,
+        isAutomatic: false,
+        startedAt:   { gte: oneMinuteAgo },
+      },
+    });
+    if (recentLesson) {
+      return interaction.editReply({
+        embeds: [errorEmbed('Çift Kayıt Engellendi',
+          `Son 60 saniye içinde bu öğrenci için **${category}** kategorisinde zaten ders eklendi (#${recentLesson.lessonNumber}).
+
+Eğer farklı bir ders eklemek istiyorsanız 1 dakika bekleyin.`)],
+      });
+    }
+
+
+    // Çift kayıt koruması — son 60 sn içinde aynı öğrenci+kategori için ders eklendiyse engelle
+    const oneMinuteAgo = new Date(Date.now() - 60_000);
+    const recentLesson = await prisma.lesson.findFirst({
+      where: { studentId: student.id, category, isAutomatic: false, startedAt: { gte: oneMinuteAgo } },
+    });
+    if (recentLesson) {
+      return interaction.editReply({
+        embeds: [errorEmbed('Çift Kayıt Engellendi',
+          `Son 60 saniye içinde bu öğrenci için **${category}** dersinde zaten kayıt oluşturuldu (#${recentLesson.lessonNumber}). 1 dakika bekleyin.`)],
+      });
+    }
+
     const lessonCount  = await prisma.lesson.count({ where: { studentId: student.id } });
     const lessonNumber = lessonCount + 1;
 
