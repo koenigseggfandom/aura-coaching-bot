@@ -1,118 +1,100 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const prisma = require('../utils/db');
-const { errorEmbed, CATEGORY_EMOJIS, CATEGORY_COLORS } = require('../utils/embeds');
+
+const CATEGORY_EMOJIS = { VOD: '🎬', GAMESENSE: '🧠', MOVEMENT: '⚡', AIM: '🎯' };
+const CAT_COLORS = { VOD: 0x6366f1, GAMESENSE: 0xec4899, MOVEMENT: 0x22c55e, AIM: 0xf59e0b };
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('ders-raporu')
-    .setDescription('Bir öğrencinin tüm ders raporunu göster')
+    .setDescription('Bir öğrencinin ders raporunu göster')
     .addUserOption(opt =>
       opt.setName('kullanici')
-        .setDescription('Raporu gösterilecek öğrenci (boş bırakırsan kendin)')
-        .setRequired(false)
-    )
-    .addStringOption(opt =>
-      opt.setName('kategori')
-        .setDescription('Sadece belirli bir kategorinin derslerini göster')
-        .setRequired(false)
-        .addChoices(
-          { name: '🎬 VOD', value: 'VOD' },
-          { name: '🧠 Gamesense', value: 'GAMESENSE' },
-          { name: '⚡ Movement', value: 'MOVEMENT' },
-          { name: '🎯 Aim', value: 'AIM' },
-        )
+        .setDescription('Raporu gösterilecek öğrenci')
+        .setRequired(true)
     ),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: false });
+    await interaction.deferReply();
 
-    const target = interaction.options.getUser('kullanici') || interaction.user;
-    const categoryFilter = interaction.options.getString('kategori');
-
-    const student = await prisma.student.findUnique({ where: { discordId: target.id } });
-    if (!student) {
-      return interaction.editReply({
-        embeds: [errorEmbed('Kayıt Bulunamadı', `<@${target.id}> kayıtlı bir öğrenci değil.`)],
-      });
-    }
-
-    const whereClause = { studentId: student.id };
-    if (categoryFilter) whereClause.category = categoryFilter;
-
-    const lessons = await prisma.lesson.findMany({
-      where: whereClause,
-      orderBy: { lessonNumber: 'asc' },
+    const user    = interaction.options.getUser('kullanici');
+    const student = await prisma.student.findUnique({
+      where:   { discordId: user.id },
+      include: { lessons: { orderBy: { startedAt: 'desc' } } },
     });
 
-    if (!lessons.length) {
-      return interaction.editReply({
-        embeds: [errorEmbed('Ders Yok', `${categoryFilter ? `**${categoryFilter}** kategorisinde` : ''} hiç ders bulunamadı.`)],
-      });
+    if (!student) {
+      return interaction.editReply({ content: `❌ <@${user.id}> kayıtlı bir öğrenci değil.` });
     }
 
-    // Stats by category
-    const byCat = {};
-    for (const l of lessons) {
-      if (!byCat[l.category]) byCat[l.category] = { count: 0, totalMins: 0 };
-      byCat[l.category].count++;
-      byCat[l.category].totalMins += l.durationMins || 0;
-    }
+    const lessons       = student.lessons;
+    // completedLessons = gerçek yapılan ders sayısı (lessons tablosundan)
+    const completedCount = lessons.length;
+    // Paket büyüklüğü = totalLessons (kayıtta set edilmiş, sabit)
+    const paketBuyuklugu = student.totalLessons || 0;
+    // Kalan = remainingLessons (her ders eklenince azalıyor)
+    const remaining      = Math.max(0, student.remainingLessons);
 
-    const totalMins = lessons.reduce((sum, l) => sum + (l.durationMins || 0), 0);
-    const autoCount = lessons.filter(l => l.isAutomatic).length;
-    const manualCount = lessons.length - autoCount;
+    const autoCount    = lessons.filter(l =>  l.isAutomatic).length;
+    const manualCount  = lessons.filter(l => !l.isAutomatic).length;
+    const totalMins    = lessons.reduce((sum, l) => sum + (l.durationMins || 0), 0);
+
+    // Kategoriye göre grupla
+    const catBreakdown = {};
+    lessons.forEach(l => {
+      catBreakdown[l.category] = (catBreakdown[l.category] || 0) + 1;
+    });
+
+    // Son 5 dersi listele
+    const recentLessons = lessons.slice(0, 5);
+
+    // Embed rengi — en çok yapılan kategori
+    const topCat = Object.entries(catBreakdown).sort((a, b) => b[1] - a[1])[0];
+    const color  = topCat ? (CAT_COLORS[topCat[0]] || 0x6366f1) : 0x6366f1;
 
     const embed = new EmbedBuilder()
-      .setColor(categoryFilter ? (CATEGORY_COLORS[categoryFilter] || 0x6366f1) : 0x6366f1)
+      .setColor(color)
       .setTitle(`📊 Ders Raporu — ${student.name} ${student.surname}`)
-      .setThumbnail(target.displayAvatarURL())
+      .setThumbnail(user.displayAvatarURL({ dynamic: true }))
       .addFields(
         {
           name: '📈 Genel Özet',
           value: [
-            `📚 Toplam: **${lessons.length}** ders`,
-            `✅ Tamamlanan: **${student.totalLessons - student.remainingLessons}**`,
-            `📋 Kalan: **${student.remainingLessons}**`,
+            `🗒️ Toplam: **${completedCount}** ders`,
+            `✅ Tamamlanan: **${completedCount}**`,
+            `📋 Kalan: **${remaining}** / **${paketBuyuklugu}** (Paket: ${student.packageType || paketBuyuklugu + ' Ders'})`,
             `⏱️ Toplam Süre: **${totalMins > 0 ? totalMins + ' dk' : 'Kayıt yok'}**`,
-            `🤖 Otomatik: **${autoCount}** | ✍️ Manuel: **${manualCount}**`,
+            `🤖 Otomatik: **${autoCount}** | 🏋️ Manuel: **${manualCount}**`,
           ].join('\n'),
           inline: false,
         },
         {
           name: '📂 Kategoriye Göre',
-          value: Object.entries(byCat).map(([cat, data]) =>
-            `${CATEGORY_EMOJIS[cat] || '📚'} **${cat}**: ${data.count} ders${data.totalMins > 0 ? ` (${data.totalMins} dk)` : ''}`
-          ).join('\n') || '-',
+          value: Object.entries(catBreakdown).length
+            ? Object.entries(catBreakdown)
+                .sort((a, b) => b[1] - a[1])
+                .map(([cat, cnt]) => `${CATEGORY_EMOJIS[cat] || '📌'} **${cat}**: ${cnt} ders`)
+                .join('\n')
+            : 'Henüz ders yok',
           inline: false,
-        }
-      )
-      .setTimestamp();
+        },
+      );
 
-    // Lesson list — chunk into pages of 15
-    const PAGE_SIZE = 15;
-    const pages = [];
-    for (let i = 0; i < lessons.length; i += PAGE_SIZE) {
-      pages.push(lessons.slice(i, i + PAGE_SIZE));
+    if (recentLessons.length > 0) {
+      embed.addFields({
+        name: '📚 Dersler',
+        value: recentLessons.map(l => {
+          const dateStr = l.startedAt
+            ? l.startedAt.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' })
+            : '-';
+          const emoji = CATEGORY_EMOJIS[l.category] || '📌';
+          return `🎓 ${emoji} **#${l.lessonNumber} ${l.category}** — ${dateStr} \`${l.coachUsername || l.coachId || '-'}\``;
+        }).join('\n'),
+        inline: false,
+      });
     }
 
-    const lessonLines = pages[0].map(l => {
-      const date = new Date(l.createdAt).toLocaleDateString('tr-TR');
-      const emoji = CATEGORY_EMOJIS[l.category] || '📚';
-      const dur = l.durationMins ? ` (${l.durationMins}dk)` : '';
-      const auto = l.isAutomatic ? '🤖' : '✍️';
-      const id = `\`${l.id.slice(-6)}\``;
-      return `${auto} ${emoji} **#${l.lessonNumber}** ${l.category} — ${date}${dur} ${id}`;
-    });
-
-    embed.addFields({
-      name: `📜 Dersler ${lessons.length > PAGE_SIZE ? `(1/${pages.length} sayfa)` : ''}`,
-      value: lessonLines.join('\n'),
-      inline: false,
-    });
-
-    if (lessons.length > PAGE_SIZE) {
-      embed.setFooter({ text: `Toplam ${lessons.length} ders var. Sadece ilk ${PAGE_SIZE} gösteriliyor.` });
-    }
+    embed.setTimestamp().setFooter({ text: `Durum: ${student.isActive ? '🟢 Aktif' : '🔴 Pasif'}` });
 
     await interaction.editReply({ embeds: [embed] });
   },
