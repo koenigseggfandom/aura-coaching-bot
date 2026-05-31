@@ -138,6 +138,16 @@ async function endSession(guild, studentDiscordId) {
     },
   }).catch(console.error);
 
+  // remainingLessons hiç set edilmemişse (0) ama paket var → önce paketi yükle
+  const currentStudent = await prisma.student.findUnique({ where: { id: session.studentId } }).catch(() => null);
+  if (currentStudent && currentStudent.remainingLessons <= 0 && currentStudent.totalLessons > 0) {
+    await prisma.student.update({
+      where: { id: session.studentId },
+      data:  { remainingLessons: currentStudent.totalLessons },
+    }).catch(console.error);
+    console.log(`[VOICE] ${session.studentUsername} remainingLessons paketten yüklendi: ${currentStudent.totalLessons}`);
+  }
+
   const updatedStudent = await prisma.student.update({
     where: { id: session.studentId },
     data: {
@@ -151,8 +161,10 @@ async function endSession(guild, studentDiscordId) {
     data: { leftAt: endedAt, isActive: false },
   }).catch(console.error);
 
-  // Kalan ders bitti veya sıfırın altına düştü — otomatik pasife al
-  if (updatedStudent && updatedStudent.remainingLessons <= 0 && updatedStudent.isActive) {
+  // Gerçekten paket tükendiyse pasife al
+  const gercekYapilan  = await prisma.lesson.count({ where: { studentId: session.studentId } }).catch(() => 0);
+  const paketBuyuklugu = currentStudent ? (currentStudent.totalLessons || 0) : 0;
+  if (updatedStudent && updatedStudent.remainingLessons <= 0 && gercekYapilan >= paketBuyuklugu && paketBuyuklugu > 0 && updatedStudent.isActive) {
     await prisma.student.update({
       where: { id: session.studentId },
       data:  { isActive: false },
