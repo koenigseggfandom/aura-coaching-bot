@@ -129,6 +129,15 @@ Eğer farklı bir ders eklemek istiyorsanız 1 dakika bekleyin.`)],
       },
     });
 
+    // remainingLessons hiç set edilmemişse (0) ama paket var → önce paketi yükle
+    if (student.remainingLessons <= 0 && student.totalLessons > 0) {
+      await prisma.student.update({
+        where: { id: student.id },
+        data:  { remainingLessons: student.totalLessons },
+      });
+      student.remainingLessons = student.totalLessons;
+    }
+
     await prisma.student.update({
       where: { id: student.id },
       data: {
@@ -137,10 +146,14 @@ Eğer farklı bir ders eklemek istiyorsanız 1 dakika bekleyin.`)],
       },
     });
 
-    // Kalan ders kontrolü — sıfırlandıysa otomatik pasife al
+    // Kalan ders kontrolü — SADECE gerçekten tükenince pasife al
+    // (remainingLessons - 1 sonucu 0 veya altıysa VE paket gerçekten dolduysa)
     const updatedStudent = await prisma.student.findUnique({ where: { id: student.id } });
+    const gercekYapilan  = await prisma.lesson.count({ where: { studentId: student.id } });
+    const paketBuyuklugu = student.totalLessons || 0;
     let autoDeactivated = false;
-    if (updatedStudent.remainingLessons <= 0 && updatedStudent.isActive) {
+    // Pasife al: kalan 0 oldu VE gerçekten paket kadar ders yapıldı
+    if (updatedStudent.remainingLessons <= 0 && gercekYapilan >= paketBuyuklugu && paketBuyuklugu > 0 && updatedStudent.isActive) {
       await prisma.student.update({
         where: { id: student.id },
         data:  { isActive: false },
