@@ -27,13 +27,19 @@ module.exports = {
       return interaction.editReply({ content: `❌ <@${user.id}> kayıtlı bir öğrenci değil.` });
     }
 
-    const lessons       = student.lessons;
+    const lessons        = student.lessons;
     // completedLessons = gerçek yapılan ders sayısı (lessons tablosundan)
     const completedCount = lessons.length;
-    // Paket büyüklüğü = totalLessons (kayıtta set edilmiş, sabit)
-    const paketBuyuklugu = student.totalLessons || 0;
+    // Paket büyüklüğü: packageType > totalLessons > kalan+yapılan
+    let paketBuyuklugu = 0;
+    if (student.packageType) {
+      const m = student.packageType.match(/\d+/);
+      if (m) paketBuyuklugu = parseInt(m[0]);
+    }
+    if (paketBuyuklugu <= 0) paketBuyuklugu = student.totalLessons || 0;
+    if (paketBuyuklugu <= 0) paketBuyuklugu = completedCount + Math.max(0, student.remainingLessons);
     // Kalan = remainingLessons (her ders eklenince azalıyor)
-    const remaining      = Math.max(0, student.remainingLessons);
+    const remaining = Math.max(0, student.remainingLessons);
 
     const autoCount    = lessons.filter(l =>  l.isAutomatic).length;
     const manualCount  = lessons.filter(l => !l.isAutomatic).length;
