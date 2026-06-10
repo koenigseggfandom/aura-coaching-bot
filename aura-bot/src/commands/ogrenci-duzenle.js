@@ -76,6 +76,36 @@ module.exports = {
       data: updateData,
     });
 
+    // isActive=false yapıldıysa Discord öğrenci rolünü de kaldır
+    if (field === 'isActive' && updateData.isActive === false) {
+      const studentRoleId = process.env.STUDENT_ROLE_ID;
+      if (studentRoleId) {
+        try {
+          const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+          if (member && member.roles.cache.has(studentRoleId)) {
+            await member.roles.remove(studentRoleId, 'ogrenci-duzenle ile pasife alındı');
+          }
+        } catch (e) {
+          console.error('[OGRENCI-DUZENLE] Rol kaldırma hatası:', e.message);
+        }
+      }
+    }
+
+    // isActive=true yapıldıysa Discord öğrenci rolünü ekle
+    if (field === 'isActive' && updateData.isActive === true) {
+      const studentRoleId = process.env.STUDENT_ROLE_ID;
+      if (studentRoleId) {
+        try {
+          const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+          if (member && !member.roles.cache.has(studentRoleId)) {
+            await member.roles.add(studentRoleId, 'ogrenci-duzenle ile aktifleştirildi');
+          }
+        } catch (e) {
+          console.error('[OGRENCI-DUZENLE] Rol ekleme hatası:', e.message);
+        }
+      }
+    }
+
     await interaction.editReply({
       embeds: [
         successEmbed(
