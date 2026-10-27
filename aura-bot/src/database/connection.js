@@ -179,7 +179,7 @@ export async function connectDatabase() {
         logger.info('✅ Firebase Firestore bağlantısı kuruldu');
         return db;
     } catch (error) {
-        logger.error('Firebase bağlantı hatası: ' + error.message);
+        logger.error('Veritabanı bağlantı hatası: ' + error.message);
         throw error;
     }
 }
