@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, MessageFlags } from 'discord.js';
 import { getFirestore } from '../../database/connection.js';
 import { logger } from '../../utils/logger.js';
 
@@ -7,20 +7,19 @@ export default {
         .setName('duyuru-kanal-belirle')
         .setDescription('Yeni başvuruların düşeceği kanalı belirler.')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addChannelOption(option => 
+        .addChannelOption(option =>
             option.setName('kanal')
                 .setDescription('Başvuruların gönderileceği kanal')
                 .addChannelTypes(ChannelType.GuildText)
                 .setRequired(true)),
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
-        
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
         const channel = interaction.options.getChannel('kanal');
 
         try {
             const db = getFirestore();
-            
-            // Ayarları Firestore'a kaydet
+
             await db.collection('settings').doc('announcements').set({
                 applicationChannelId: channel.id,
                 updatedAt: new Date(),

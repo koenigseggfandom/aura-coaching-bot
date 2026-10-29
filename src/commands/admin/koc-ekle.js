@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { getFirestore } from '../../database/connection.js';
 import { logger } from '../../utils/logger.js';
 
@@ -7,29 +7,28 @@ export default {
         .setName('koc-ekle')
         .setDescription('Yeni bir koç kaydı oluşturur ve veritabanına ekler.')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addStringOption(option => 
+        .addStringOption(option =>
             option.setName('isim')
                 .setDescription('Koçun tam adı')
                 .setRequired(true))
-        .addUserOption(option => 
+        .addUserOption(option =>
             option.setName('kullanici')
                 .setDescription('Discord kullanıcısı')
                 .setRequired(true))
-        .addStringOption(option => 
+        .addStringOption(option =>
             option.setName('uzmanlik')
                 .setDescription('Uzmanlık alanı (Aim, VOD vb.)')
                 .setRequired(false)),
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
-        
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
         const name = interaction.options.getString('isim');
         const user = interaction.options.getUser('kullanici');
         const specialty = interaction.options.getString('uzmanlik') || 'Genel';
 
         try {
             const db = getFirestore();
-            
-            // Firestore'a ekle (coaches koleksiyonu)
+
             const docRef = await db.collection('coaches').add({
                 fullName: name,
                 discord: user.id,
@@ -37,16 +36,17 @@ export default {
                 specialty: specialty,
                 isActive: true,
                 role: 'coach',
-                createdAt: new Date(),
+                createdAt: new Date().toISOString(),
                 addedBy: interaction.user.tag
             });
 
-            // Ayrıca students koleksiyonuna da (rol: coach) olarak ekleyelim (senkronizasyon için)
+            // Senkronizasyon için students koleksiyonuna da ekle
             await db.collection('students').add({
                 fullName: name,
                 discord: user.id,
                 role: 'coach',
-                isActive: true
+                isActive: true,
+                createdAt: new Date().toISOString()
             });
 
             logger.info(`[Admin] Manuel koç eklendi: ${name} (${user.tag})`);

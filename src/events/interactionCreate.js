@@ -1,4 +1,4 @@
-import { Events } from 'discord.js';
+import { Events, MessageFlags } from 'discord.js';
 import { logger } from '../utils/logger.js';
 
 export default {
@@ -19,9 +19,9 @@ export default {
             logger.error(`Komut yürütme hatası (${interaction.commandName}): ${error.message}`);
             try {
                 if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true }).catch(() => {});
+                    await interaction.followUp({ content: 'Bu komutu çalıştırırken bir hata oluştu!', flags: MessageFlags.Ephemeral }).catch(() => {});
                 } else {
-                    await interaction.reply({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true }).catch(() => {});
+                    await interaction.reply({ content: 'Bu komutu çalıştırırken bir hata oluştu!', flags: MessageFlags.Ephemeral }).catch(() => {});
                 }
             } catch (_) {}
         }

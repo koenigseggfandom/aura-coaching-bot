@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { getFirestore } from '../../database/connection.js';
 
 export default {
@@ -6,11 +6,11 @@ export default {
         .setName('kalan-ders')
         .setDescription('Kalan ders sayınızı kontrol edin.'),
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
-        
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
         const db = getFirestore();
         const studentSnap = await db.collection('students')
-            .where('discord', 'in', [interaction.user.id, interaction.user.tag])
+            .where('discord', '==', interaction.user.id)
             .get();
 
         if (studentSnap.empty) {
@@ -19,12 +19,12 @@ export default {
 
         const data = studentSnap.docs[0].data();
         const embed = new EmbedBuilder()
-            .setColor('#5865F2')
+            .setColor('#ff4655')
             .setTitle('📊 Ders Durumu')
             .addFields(
-                { name: 'Öğrenci', value: data.fullName || interaction.user.username, inline: true },
-                { name: 'Paket', value: data.packageName || 'Belirtilmemiş', inline: true },
-                { name: 'Kalan Ders', value: `${data.remainingLessons || 0} / ${data.totalLessons || 0}`, inline: false }
+                { name: '👤 Öğrenci', value: data.fullName || interaction.user.username, inline: true },
+                { name: '📦 Paket', value: data.packageName || 'Belirtilmemiş', inline: true },
+                { name: '📚 Kalan Ders', value: `${data.remainingLessons || 0} / ${data.totalLessons || 0}`, inline: false }
             )
             .setTimestamp();
 
