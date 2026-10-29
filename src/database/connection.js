@@ -1,10 +1,7 @@
 import admin from 'firebase-admin';
-import { MongoClient } from 'mongodb';
 import { logger } from '../utils/logger.js';
-import { createMongoFirestoreAdapter } from './mongoAdapter.js';
 
 let db;
-let mongoClient;
 
 function detectKeyType(rawKey) {
     if (/-----BEGIN RSA PRIVATE KEY-----/.test(rawKey)) return 'RSA';
@@ -99,27 +96,6 @@ function tryBuildCredential(serviceAccount) {
 
 export async function connectDatabase() {
     try {
-        if (db) {
-            return db;
-        }
-
-        // 1. Önce MONGO_URL kontrolü yap (Railway MongoDB)
-        if (process.env.MONGO_URL) {
-            logger.info('📦 MONGO_URL tespit edildi, MongoDB bağlantısı kuruluyor...');
-            mongoClient = new MongoClient(process.env.MONGO_URL, {
-                maxPoolSize: 10,
-                serverSelectionTimeoutMS: 10000
-            });
-            await mongoClient.connect();
-            const urlObj = new URL(process.env.MONGO_URL.replace('mongodb://', 'http://').replace('mongodb+srv://', 'http://'));
-            const dbName = urlObj.pathname.replace(/^\//, '') || 'aura_database';
-            const mongoDb = mongoClient.db(dbName);
-            db = createMongoFirestoreAdapter(mongoDb);
-            logger.info(`✅ MongoDB veritabanı bağlantısı kuruldu (db: ${dbName})`);
-            return db;
-        }
-
-        // 2. MONGO_URL yoksa Firebase Firestore'a bağlan
         if (admin.apps.length > 0) {
             db = admin.firestore();
             return db;
@@ -179,14 +155,14 @@ export async function connectDatabase() {
         logger.info('✅ Firebase Firestore bağlantısı kuruldu');
         return db;
     } catch (error) {
-        logger.error('Veritabanı bağlantı hatası: ' + error.message);
+        logger.error('Firebase bağlantı hatası: ' + error.message);
         throw error;
     }
 }
 
 export function getFirestore() {
     if (!db) {
-        throw new Error('Veritabanı henüz bağlanmadı! connectDatabase() çağırın.');
+        throw new Error('Firebase henüz bağlanmadı! connectDatabase() çağırın.');
     }
     return db;
 }
