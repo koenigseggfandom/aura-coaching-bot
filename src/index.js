@@ -56,4 +56,12 @@ async function startBot() {
     }
 }
 
+process.on('unhandledRejection', (reason) => {
+    logger.warn(`[Unhandled Rejection] ${reason?.message || reason}`);
+});
+
+process.on('uncaughtException', (err) => {
+    logger.error(`[Uncaught Exception] ${err?.message || err}`);
+});
+
 startBot();

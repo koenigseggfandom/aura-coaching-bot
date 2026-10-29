@@ -17,11 +17,13 @@ export default {
             await command.execute(interaction);
         } catch (error) {
             logger.error(`Komut yürütme hatası (${interaction.commandName}): ${error.message}`);
-            if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true });
-            } else {
-                await interaction.reply({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true });
-            }
+            try {
+                if (interaction.replied || interaction.deferred) {
+                    await interaction.followUp({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true }).catch(() => {});
+                } else {
+                    await interaction.reply({ content: 'Bu komutu çalıştırırken bir hata oluştu!', ephemeral: true }).catch(() => {});
+                }
+            } catch (_) {}
         }
     }
 };
