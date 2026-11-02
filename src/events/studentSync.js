@@ -7,7 +7,7 @@ let studentsUnsubscribe = null;
 export function startStudentSync(client) {
     const db = getFirestore();
     
-    logger.info('[Sync] Firestore öğrenci senkronizasyonu başlatıldı.');
+    logger.info('[Sync] MongoDB/Firestore öğrenci senkronizasyonu başlatıldı.');
 
     async function handleRemovedStudent(client, studentId, data) {
         try {
@@ -15,12 +15,12 @@ export function startStudentSync(client) {
             if (!guild) return;
             const role = await getStudentRole(guild);
             if (!role) return;
-            const member = await findMember(guild, data.discord);
+            const member = await findMember(guild, data.discord, data, studentId);
             if (!member) return;
             if (!member.roles.cache.has(role.id)) return;
 
             await member.roles.remove(role);
-            logger.info(`[Sync] Öğrenci Firestore'dan silindi, rol geri alındı: ${member.user.tag} -> ${data.fullName || studentId}`);
+            logger.info(`[Sync] Öğrenci silindi, rol geri alındı: ${member.user.tag} -> ${data.fullName || studentId}`);
         } catch (e) {
             logger.error(`[Sync] removed hatası: ${e.message}`);
         }
@@ -41,13 +41,13 @@ export function startStudentSync(client) {
                     await handleStudentUpdate(client, id, data);
                 } else if (change.type === 'removed') {
                     processedStudentIds.delete(id);
-                    logger.info(`[Sync] Öğrenci silindi (Firestore): ${data?.fullName || id}`);
+                    logger.info(`[Sync] Öğrenci silindi: ${data?.fullName || id}`);
                     handleRemovedStudent(client, id, data || {});
                 }
             });
         },
         (err) => {
-            logger.error('[Sync] Firestore snapshot hatası: ' + err.message);
+            logger.error('[Sync] Öğrenci snapshot hatası: ' + err.message);
             setTimeout(() => startStudentSync(client), 5000);
         }
     );
@@ -57,9 +57,9 @@ async function handleNewStudent(client, studentId, data) {
     const guild = await getGuild(client);
     if (!guild) return;
 
-    const member = await findMember(guild, data.discord);
+    const member = await findMember(guild, data.discord, data, studentId);
     if (!member) {
-        logger.warn(`[Sync] Kayıt bulundu ama Discord hesabı eşleşmedi: ${data.fullName || data.name} (${data.discord})`);
+        logger.warn(`[Sync] Kayıt bulundu ama Discord hesabı eşleşmedi: ${data.fullName || data.name} (${data.discord || data.discordId})`);
         return;
     }
 
@@ -72,7 +72,6 @@ async function handleNewStudent(client, studentId, data) {
             await member.roles.add(role);
             logger.info(`[Sync] ${member.user.tag} kullanıcısına ${role.name} rolü verildi.`);
             
-            // Sadece loga yaz, DM ATMA
             if (!isCoachData) {
                 logWelcome(data, member.user.tag);
             }
@@ -98,11 +97,10 @@ async function getCoachRole(guild) {
 }
 
 async function handleStudentUpdate(client, studentId, data) {
-    // Güncelleme mantığı (gerekirse rol geri alma vb.)
     const guild = await getGuild(client);
     if (!guild) return;
 
-    const member = await findMember(guild, data.discord);
+    const member = await findMember(guild, data.discord, data, studentId);
     if (!member) return;
 
     const role = await getStudentRole(guild);
@@ -123,7 +121,7 @@ async function handleStudentUpdate(client, studentId, data) {
             if (!isReactivation) {
                 logWelcome(data, member.user.tag);
             } else {
-                logger.info(`[Sync] ${member.user.tag} kullanıcısı tekrar aktif edildi (DM atılmadı, loglandı).`);
+                logger.info(`[Sync] ${member.user.tag} kullanıcısı tekrar aktif edildi.`);
             }
         } else if (!isActive && member.roles.cache.has(role.id)) {
             await member.roles.remove(role);
@@ -144,22 +142,112 @@ async function getStudentRole(guild) {
     return guild.roles.cache.find(r => r.name.toLowerCase().includes('öğrenci') || r.name.toLowerCase().includes('student'));
 }
 
-async function findMember(guild, discordIdentifier) {
-    if (!discordIdentifier) return null;
-    
-    // ID ise
-    if (/^\d{17,19}$/.test(discordIdentifier)) {
-        return await guild.members.fetch(discordIdentifier).catch(() => null);
-    }
-    
-    // Tag ise (User#0000)
-    if (discordIdentifier.includes('#')) {
-        const [username, discriminator] = discordIdentifier.split('#');
-        const members = await guild.members.fetch({ query: username, limit: 100 });
-        return members.find(m => m.user.discriminator === discriminator);
+export async function findMember(guild, discordIdentifier, data = {}, studentId = null) {
+    if (!guild) return null;
+
+    // 1. data.discordId numeric snowflake (17-21 hane)
+    const directId = data.discordId || (typeof discordIdentifier === 'string' && /^\d{17,21}$/.test(discordIdentifier.trim()) ? discordIdentifier.trim() : null);
+    if (directId) {
+        const member = await guild.members.fetch(String(directId)).catch(() => null);
+        if (member) return member;
     }
 
-    // Sadece username ise
-    const members = await guild.members.fetch({ query: discordIdentifier, limit: 1 });
-    return members.first();
+    // 2. Mention formatı: <@123456789012345678> veya <@!123456789012345678>
+    const str = String(discordIdentifier || data.discord || '').trim();
+    const mentionMatch = str.match(/<@!?(\d{17,21})>/);
+    if (mentionMatch) {
+        const member = await guild.members.fetch(mentionMatch[1]).catch(() => null);
+        if (member) {
+            autoLinkDiscordId(member.id, studentId || data.id);
+            return member;
+        }
+    }
+
+    // 3. registrations tablosu üzerinden eşleşme kontrolü
+    const sid = studentId || data.id;
+    if (sid) {
+        try {
+            const db = getFirestore();
+            const regSnap = await db.collection('registrations')
+                .where('firestoreStudentId', '==', sid)
+                .limit(1)
+                .get();
+            if (!regSnap.empty) {
+                const regData = regSnap.docs[0].data();
+                const regStudentId = String(regData.studentId || '').trim();
+                if (/^\d{17,21}$/.test(regStudentId)) {
+                    const member = await guild.members.fetch(regStudentId).catch(() => null);
+                    if (member) {
+                        autoLinkDiscordId(member.id, sid);
+                        return member;
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+
+    if (!str) return null;
+
+    // 4. @ işaretini temizle
+    const cleanTag = str.startsWith('@') ? str.slice(1).trim() : str;
+
+    // 5. User#1234 discriminator
+    if (cleanTag.includes('#')) {
+        const [username, discriminator] = cleanTag.split('#');
+        try {
+            const members = await guild.members.fetch({ query: username, limit: 50 }).catch(() => null);
+            if (members) {
+                const found = members.find(m => m.user.discriminator === discriminator || m.user.username.toLowerCase() === username.toLowerCase());
+                if (found) {
+                    autoLinkDiscordId(found.id, sid);
+                    return found;
+                }
+            }
+        } catch (_) {}
+    }
+
+    // 6. Username / DisplayName arama
+    try {
+        const members = await guild.members.fetch({ query: cleanTag, limit: 10 }).catch(() => null);
+        if (members && members.size > 0) {
+            const exactUser = members.find(m => m.user.username.toLowerCase() === cleanTag.toLowerCase());
+            if (exactUser) {
+                autoLinkDiscordId(exactUser.id, sid);
+                return exactUser;
+            }
+            const exactNick = members.find(m => m.displayName.toLowerCase() === cleanTag.toLowerCase());
+            if (exactNick) {
+                autoLinkDiscordId(exactNick.id, sid);
+                return exactNick;
+            }
+            const first = members.first();
+            autoLinkDiscordId(first.id, sid);
+            return first;
+        }
+    } catch (_) {}
+
+    // 7. Cache araması
+    const lower = cleanTag.toLowerCase();
+    const cached = guild.members.cache.find(m => 
+        m.user.username.toLowerCase() === lower || 
+        m.user.tag.toLowerCase() === lower ||
+        m.displayName.toLowerCase() === lower
+    );
+    if (cached) {
+        autoLinkDiscordId(cached.id, sid);
+        return cached;
+    }
+
+    return null;
+}
+
+function autoLinkDiscordId(discordId, studentId) {
+    if (!discordId || !studentId) return;
+    try {
+        const db = getFirestore();
+        db.collection('students').doc(studentId).update({
+            discordId: String(discordId),
+            updatedAt: new Date().toISOString()
+        }).catch(() => {});
+    } catch (_) {}
 }

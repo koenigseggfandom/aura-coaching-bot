@@ -20,11 +20,12 @@ function buildIdFilter(id) {
 /**
  * Formats a raw MongoDB document into a Firestore-like document snapshot.
  */
-function formatDocSnapshot(rawDoc) {
+function formatDocSnapshot(rawDoc, collectionRef = null) {
     if (!rawDoc) {
         return {
             exists: false,
             id: null,
+            ref: null,
             data: () => null
         };
     }
@@ -35,6 +36,7 @@ function formatDocSnapshot(rawDoc) {
     return {
         exists: true,
         id: docId,
+        ref: collectionRef ? new MongoDocRef(collectionRef, docId) : null,
         data: () => ({ id: docId, ...rest })
     };
 }
@@ -92,7 +94,7 @@ class MongoQueryBuilder {
             cursor = cursor.limit(this.limitCount);
         }
         const docs = await cursor.toArray();
-        const docSnapshots = docs.map(formatDocSnapshot);
+        const docSnapshots = docs.map((d) => formatDocSnapshot(d, this.collection));
 
         return {
             empty: docSnapshots.length === 0,
@@ -115,7 +117,7 @@ class MongoDocRef {
     async get() {
         const filter = buildIdFilter(this.id);
         const doc = await this.collection.findOne(filter);
-        return formatDocSnapshot(doc);
+        return formatDocSnapshot(doc, this.collection);
     }
 
     async set(data, options = {}) {
@@ -215,7 +217,7 @@ class MongoCollectionRef extends MongoQueryBuilder {
                 const docChanges = [];
 
                 for (const raw of rawDocs) {
-                    const snap = formatDocSnapshot(raw);
+                    const snap = formatDocSnapshot(raw, this.collection);
                     const hash = JSON.stringify(snap.data());
                     currentDocsMap.set(snap.id, { snap, hash });
 
@@ -269,6 +271,35 @@ export function createMongoFirestoreAdapter(mongoDb) {
         collection: (name) => {
             const rawCol = mongoDb.collection(name);
             return new MongoCollectionRef(rawCol, name);
+        },
+        runTransaction: async (updateFunction) => {
+            const tx = {
+                get: async (docRef) => await docRef.get(),
+                set: async (docRef, data, options) => await docRef.set(data, options),
+                update: async (docRef, data) => await docRef.update(data),
+                delete: async (docRef) => await docRef.delete()
+            };
+            return await updateFunction(tx);
+        },
+        batch: () => {
+            const ops = [];
+            return {
+                set(docRef, data, options) {
+                    ops.push(() => docRef.set(data, options));
+                    return this;
+                },
+                update(docRef, data) {
+                    ops.push(() => docRef.update(data));
+                    return this;
+                },
+                delete(docRef) {
+                    ops.push(() => docRef.delete());
+                    return this;
+                },
+                commit: async () => {
+                    for (const op of ops) await op();
+                }
+            };
         }
     };
 }

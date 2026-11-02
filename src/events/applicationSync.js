@@ -4,46 +4,47 @@ import { logger } from '../utils/logger.js';
 
 let applicationChannelId = null;
 const processedAppIds = new Set();
+let isInitialSnap = true;
 
 export async function startApplicationSync(client) {
     const db = getFirestore();
     
     logger.info('[Sync] Başvuru senkronizasyonu başlatıldı.');
 
-    // Önce ayarları al
+    // Önce ayarları dinle
     const settingsRef = db.collection('settings').doc('announcements');
     settingsRef.onSnapshot((doc) => {
-        if (doc.exists) {
+        if (doc && doc.exists) {
             applicationChannelId = doc.data().applicationChannelId;
-            logger.info(`[Sync] Başvuru kanalı güncellendi: ${applicationChannelId}`);
+            logger.info(`[Sync] Başvuru duyuru kanalı güncellendi: ${applicationChannelId}`);
         }
     });
 
     // Başvuruları dinle
     db.collection('applications').onSnapshot(
         (snap) => {
-            snap.docChanges().forEach(async (change) => {
+            const changes = snap.docChanges();
+
+            if (isInitialSnap) {
+                // İlk okumada mevcut tüm başvuruları hafızaya al
+                changes.forEach((change) => {
+                    processedAppIds.add(change.doc.id);
+                });
+                isInitialSnap = false;
+                logger.info(`[Sync] Mevcut ${processedAppIds.size} başvuru hafızaya alındı, yeni gelenler bekleniyor.`);
+                return;
+            }
+
+            // İlk çalıştırmadan sonra yeni eklenen tüm başvuruları anında gönder
+            changes.forEach(async (change) => {
                 const doc = change.doc;
                 const id = doc.id;
                 const data = doc.data();
 
                 if (change.type === 'added') {
-                    // Bot yeni açıldığında eski başvuruları tekrar atmasın diye kontrol
-                    // İlk snap'te tüm dokümanlar 'added' olarak gelir
-                    // Bu yüzden processedAppIds'e bot açılışında mevcut olanları ekleyebiliriz
-                    // Ama kullanıcı "gerçek zamanlı her saniye kontrol etsin" dediği için 
-                    // yeni gelenleri hemen atmalıyız.
                     if (processedAppIds.has(id)) return;
                     processedAppIds.add(id);
-
-                    // Eğer bot yeni açıldıysa ve snapshot çok eskiyse (örn: 5 dakikadan eski) gönderme
-                    const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt);
-                    const now = new Date();
-                    const diff = (now - createdAt) / 1000; // saniye
-
-                    if (diff < 60) { // Son 60 saniye içinde geldiyse yeni sayalım
-                        await postApplication(client, id, data);
-                    }
+                    await postApplication(client, id, data);
                 }
             });
         },
@@ -54,36 +55,65 @@ export async function startApplicationSync(client) {
     );
 }
 
+async function resolveApplicationChannel(client) {
+    if (applicationChannelId) {
+        const ch = await client.channels.fetch(applicationChannelId).catch(() => null);
+        if (ch) return ch;
+    }
+
+    if (process.env.APPLICATION_CHANNEL_ID) {
+        const ch = await client.channels.fetch(process.env.APPLICATION_CHANNEL_ID).catch(() => null);
+        if (ch) return ch;
+    }
+
+    // Guild içindeki başvuru kanallarını ara
+    const guildId = process.env.GUILD_ID;
+    const guild = guildId ? client.guilds.cache.get(guildId) : client.guilds.cache.first();
+    if (guild) {
+        const found = guild.channels.cache.find(c => 
+            c.isTextBased() && (
+                c.name.includes('başvuru') || 
+                c.name.includes('basvuru') || 
+                c.name.includes('application') ||
+                c.name.includes('kayıt')
+            )
+        );
+        if (found) {
+            applicationChannelId = found.id;
+            return found;
+        }
+    }
+    return null;
+}
+
 async function postApplication(client, appId, data) {
-    if (!applicationChannelId) {
-        logger.warn('[Sync] Başvuru kanalı henüz belirlenmemiş! /duyuru-kanal-belirle komutunu kullanın.');
+    const channel = await resolveApplicationChannel(client);
+    if (!channel) {
+        logger.warn('[Sync] Başvuru kanalı bulunamadı! /duyuru-kanal-belirle komutunu kullanın veya APPLICATION_CHANNEL_ID tanımlayın.');
         return;
     }
 
     try {
-        const channel = await client.channels.fetch(applicationChannelId).catch(() => null);
-        if (!channel) return;
-
         const embed = new EmbedBuilder()
             .setColor('#F59E0B')
-            .setTitle('📩 Yeni Koçluk Başvurusu!')
+            .setTitle('📝 Yeni Koçluk Başvurusu!')
             .setDescription('Web sitesinden yeni bir başvuru alındı.')
             .addFields(
                 { name: '👤 İsim Soyisim', value: data.fullName || `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Bilinmiyor', inline: true },
-                { name: '🎮 Discord', value: `\`${data.discord || 'Bilinmiyor'}\``, inline: true },
+                { name: '💬 Discord', value: `\`${data.discord || 'Bilinmiyor'}\``, inline: true },
                 { name: '📧 E-posta', value: data.email || 'Bilinmiyor', inline: true },
-                { name: '📊 Mevcut Rank', value: data.currentRank || 'Belirtilmedi', inline: true },
-                { name: '🎯 Hedef Rank', value: data.targetRank || 'Belirtilmedi', inline: true },
-                { name: '🕒 Uygun Saatler', value: data.availability || 'Belirtilmedi', inline: true },
+                { name: '🎯 Mevcut Rank', value: data.currentRank || 'Belirtilmedi', inline: true },
+                { name: '🏆 Hedef Rank', value: data.targetRank || 'Belirtilmedi', inline: true },
+                { name: '⏰ Uygun Saatler', value: data.availability || 'Belirtilmedi', inline: true },
                 { name: '🔗 Tracker Link', value: data.trackerLink || 'Belirtilmedi', inline: false },
-                { name: '📝 Beklentiler', value: data.expectations || 'Belirtilmedi', inline: false },
-                { name: '💬 Kendini Tanıtma', value: data.introduction || 'Not bırakılmadı', inline: false }
+                { name: '📌 Beklentiler', value: data.expectations || 'Belirtilmedi', inline: false },
+                { name: '📝 Kendini Tanıtma', value: data.introduction || 'Not bırakılmadı', inline: false }
             )
             .setFooter({ text: `Başvuru ID: ${appId}` })
             .setTimestamp();
 
         await channel.send({ 
-            content: '🔔 **Yeni Başvuru Geldi!**',
+            content: '🚨 **Yeni Başvuru Geldi!**',
             embeds: [embed] 
         });
         

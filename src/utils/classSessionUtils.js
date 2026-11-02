@@ -13,20 +13,45 @@ export const CLASS_DEFS = [
     { id: 'classC', code: 'C', name: 'C Sınıfı', envKey: 'CLASS_C_CHANNEL_ID' }
 ];
 
+export let dynamicClassDefs = [...CLASS_DEFS];
+
+export function updateDynamicClassDefs(classesObj) {
+    if (!classesObj) return;
+    const map = new Map();
+    CLASS_DEFS.forEach(d => map.set(d.id, { ...d }));
+
+    if (typeof classesObj === 'object') {
+        const entries = Array.isArray(classesObj) ? classesObj.map(c => [c.id, c]) : Object.entries(classesObj);
+        for (const [key, val] of entries) {
+            const existing = map.get(key) || {};
+            map.set(key, {
+                id: key,
+                code: val.code || existing.code || key.replace(/^class/, '').toUpperCase(),
+                name: val.name || existing.name || `${key} Sınıfı`,
+                channelId: val.channelId || (existing.envKey ? process.env[existing.envKey] : ''),
+                envKey: existing.envKey,
+                coach: val.coach || existing.coach || '',
+                description: val.description || existing.description || ''
+            });
+        }
+    }
+    dynamicClassDefs = Array.from(map.values());
+}
+
 /** Verilen Discord kanal ID'sinin hangi sınıfa ait olduğunu döndürür */
 export function getClassByChannelId(channelId) {
     if (!channelId) return null;
     const idStr = String(channelId);
-    for (const def of CLASS_DEFS) {
-        const envVal = (process.env[def.envKey] || '').trim();
-        if (envVal && envVal === idStr) return def;
+    for (const def of dynamicClassDefs) {
+        if (def.channelId && String(def.channelId).trim() === idStr) return def;
+        if (def.envKey && (process.env[def.envKey] || '').trim() === idStr) return def;
     }
     return null;
 }
 
 /** classId ("classA") ile sınıf tanımını döndürür */
 export function getClassById(classId) {
-    return CLASS_DEFS.find((d) => d.id === classId) || null;
+    return dynamicClassDefs.find((d) => d.id === classId) || CLASS_DEFS.find((d) => d.id === classId) || null;
 }
 
 // Haftalık program gün anahtarları (JS getDay(): 0=Pazar ... 6=Cumartesi)
@@ -44,24 +69,49 @@ function timeToMinutes(str) {
 }
 
 /**
- * Sınıf ses kanalı eşleştirmesini panele yayınlar (panel Discord kanal adını gösterebilsin).
+ * Sınıf ses kanalı eşleştirmesini panele yayınlar ve dinamik sınıfları dinler.
  */
 export async function publishClassConfig(db, guild) {
-    const classes = {};
-    for (const def of CLASS_DEFS) {
-        const channelId = (process.env[def.envKey] || '').trim();
-        if (!channelId) continue;
-        let channelName = null;
-        try {
-            const ch = guild
-                ? (guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null)))
-                : null;
-            channelName = ch ? ch.name : null;
-        } catch (_) {}
-        classes[def.id] = { channelId, channelName };
+    try {
+        // Dinamik sınıf değişikliklerini dinle
+        db.collection('classConfig').doc('main').onSnapshot((doc) => {
+            if (doc && doc.exists && doc.data()?.classes) {
+                updateDynamicClassDefs(doc.data().classes);
+                logger.info(`[Sınıf] Dinamik sınıf tanımları güncellendi (${dynamicClassDefs.length} sınıf).`);
+            }
+        });
+
+        // Mevcut config'i oku
+        const currentDoc = await db.collection('classConfig').doc('main').get();
+        const currentClasses = (currentDoc && currentDoc.exists && currentDoc.data()?.classes) || {};
+        updateDynamicClassDefs(currentClasses);
+
+        const classes = { ...currentClasses };
+        for (const def of dynamicClassDefs) {
+            const channelId = def.channelId || (def.envKey ? (process.env[def.envKey] || '').trim() : '');
+            if (!channelId) continue;
+            let channelName = def.channelName || null;
+            try {
+                const ch = guild
+                    ? (guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null)))
+                    : null;
+                if (ch) channelName = ch.name;
+            } catch (_) {}
+            classes[def.id] = {
+                ...(classes[def.id] || {}),
+                code: def.code,
+                name: def.name,
+                coach: def.coach || '',
+                channelId,
+                channelName
+            };
+        }
+
+        await db.collection('classConfig').doc('main').set({ classes, updatedAt: new Date() }, { merge: true });
+        logger.info('[Sınıf] Kanal eşleştirmesi panele yayınlandı.');
+    } catch (e) {
+        logger.warn('[Sınıf] publishClassConfig hatası: ' + e.message);
     }
-    await db.collection('classConfig').doc('main').set({ classes, updatedAt: new Date() }, { merge: true });
-    logger.info('[Sınıf] Kanal eşleştirmesi panele yayınlandı.');
 }
 
 

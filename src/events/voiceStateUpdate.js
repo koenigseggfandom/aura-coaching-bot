@@ -119,8 +119,23 @@ async function endLesson(session, reason, guild, deductPackage = true) {
             .get();
 
         if (studentSnap.empty) {
+            const regSnap = await db.collection('registrations')
+                .where('studentId', '==', String(session.studentId))
+                .limit(1)
+                .get()
+                .catch(() => ({ empty: true }));
+            if (!regSnap.empty && regSnap.docs[0].data()?.firestoreStudentId) {
+                const sDoc = await db.collection('students').doc(regSnap.docs[0].data().firestoreStudentId).get();
+                if (sDoc.exists) {
+                    studentSnap = { empty: false, size: 1, docs: [sDoc] };
+                }
+            }
+        }
+
+        if (studentSnap.empty) {
+            const cleanStudentTag = String(session.studentTag || '').replace(/^@/, '');
             studentSnap = await db.collection('students')
-                .where('discord', 'in', [session.studentId, session.studentTag, session.studentName])
+                .where('discord', 'in', [session.studentId, session.studentTag, cleanStudentTag, session.studentName])
                 .limit(1)
                 .get();
         }
@@ -133,10 +148,14 @@ async function endLesson(session, reason, guild, deductPackage = true) {
         }
         
         if (!studentSnap.empty) {
-            const studentDocRef = studentSnap.docs[0].ref;
+            const studentDocRef = studentSnap.docs[0].ref || db.collection('students').doc(studentSnap.docs[0].id);
             const initialData = studentSnap.docs[0].data();
             totalLessons = Number(initialData.totalLessons || 0);
             studentFullName = initialData.fullName || session.studentName || session.studentTag;
+
+            if (!initialData.discordId && session.studentId) {
+                studentDocRef.update({ discordId: String(session.studentId) }).catch(() => {});
+            }
 
             if (deductPackage) {
                 const newHistoryItem = {
