@@ -34,19 +34,56 @@ export default {
         try {
             const db = getFirestore();
 
+            // Check for duplicate by discordId
+            const existing = await db.collection('students')
+                .where('discordId', '==', user.id)
+                .limit(1)
+                .get();
+
+            if (!existing.empty) {
+                return interaction.editReply(`⚠️ **${user.tag}** zaten öğrenci olarak kayıtlı. (ID: \`${existing.docs[0].id}\`)`);
+            }
+
+            // Also check by discord field
+            const existingByDiscord = await db.collection('students')
+                .where('discord', '==', user.id)
+                .limit(1)
+                .get();
+
+            if (!existingByDiscord.empty) {
+                return interaction.editReply(`⚠️ **${user.tag}** zaten öğrenci olarak kayıtlı. (ID: \`${existingByDiscord.docs[0].id}\`)`);
+            }
+
             const docRef = await db.collection('students').add({
                 fullName: name,
                 discord: user.id,
+                discordId: user.id,
                 discordTag: user.tag,
+                discordUsername: user.username,
                 totalLessons: totalLessons,
+                usedLessons: 0,
                 remainingLessons: totalLessons,
+                lessonHistory: [],
                 packageName: packageName,
                 isActive: true,
                 createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
                 addedBy: interaction.user.tag
             });
 
-            logger.info(`[Admin] Manuel öğrenci eklendi: ${name} (${user.tag})`);
+            // Also create a registration record for bot-student linking
+            await db.collection('registrations').add({
+                firestoreStudentId: docRef.id,
+                studentId: user.id,
+                studentTag: user.tag,
+                packageType: packageName,
+                status: 'active',
+                approvedBy: interaction.user.tag,
+                createdAt: new Date(),
+                updatedAt: new Date()
+            });
+
+            logger.info(`[Admin] Manuel öğrenci eklendi: ${name} (${user.tag}) - ID: ${docRef.id}`);
             await interaction.editReply(`✅ **${name}** başarıyla öğrenci olarak kaydedildi!\nID: \`${docRef.id}\``);
         } catch (error) {
             logger.error(`[Admin] Öğrenci ekleme hatası: ${error.message}`);

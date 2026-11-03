@@ -3,7 +3,7 @@ import { logger } from '../utils/logger.js';
 import { startStudentSync } from './studentSync.js';
 import { startApplicationSync } from './applicationSync.js';
 import { initClassSessions } from './classVoiceTracker.js';
-import { publishClassConfig, getFirestore } from '../utils/classSessionUtils.js';
+import { publishClassConfig, watchClassConfig, getFirestore } from '../utils/classSessionUtils.js';
 
 export default {
     name: Events.ClientReady,
@@ -16,6 +16,12 @@ export default {
             startStudentSync(client);
             startApplicationSync(client);
         }, 2000);
+
+        // Panelde tanımlı sınıfları (classConfig) izle: sınıf eklenip kanal eşleştirildiğinde
+        // ses kanalı takibi otomatik devreye girer
+        setTimeout(() => {
+            watchClassConfig(getFirestore());
+        }, 2500);
 
         // Sınıf ders oturumlarını kontrol et (bot yeniden başlatıldıysa)
         setTimeout(() => {

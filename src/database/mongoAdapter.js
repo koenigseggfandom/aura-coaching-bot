@@ -19,26 +19,33 @@ function buildIdFilter(id) {
 
 /**
  * Formats a raw MongoDB document into a Firestore-like document snapshot.
+ * If collection is provided, attaches a .ref property for Firestore compat.
  */
-function formatDocSnapshot(rawDoc, collectionRef = null) {
+function formatDocSnapshot(rawDoc, collection) {
     if (!rawDoc) {
         return {
             exists: false,
             id: null,
-            ref: null,
-            data: () => null
+            data: () => null,
+            ref: null
         };
     }
 
     const { _id, ...rest } = rawDoc;
     const docId = String(_id);
 
-    return {
+    const snap = {
         exists: true,
         id: docId,
-        ref: collectionRef ? new MongoDocRef(collectionRef, docId) : null,
         data: () => ({ id: docId, ...rest })
     };
+
+    // Attach a ref so callers can do snap.docs[0].ref.update(...)
+    if (collection) {
+        snap.ref = new MongoDocRef(collection, docId);
+    }
+
+    return snap;
 }
 
 /**
@@ -94,7 +101,7 @@ class MongoQueryBuilder {
             cursor = cursor.limit(this.limitCount);
         }
         const docs = await cursor.toArray();
-        const docSnapshots = docs.map((d) => formatDocSnapshot(d, this.collection));
+        const docSnapshots = docs.map(d => formatDocSnapshot(d, this.collection));
 
         return {
             empty: docSnapshots.length === 0,
@@ -194,6 +201,11 @@ class MongoCollectionRef extends MongoQueryBuilder {
     }
 
     doc(id) {
+        // If no id given, generate one (Firestore compat for auto-IDs)
+        if (id === undefined || id === null) {
+            const newId = new ObjectId().toHexString();
+            return new MongoDocRef(this.collection, newId);
+        }
         return new MongoDocRef(this.collection, id);
     }
 
@@ -272,34 +284,34 @@ export function createMongoFirestoreAdapter(mongoDb) {
             const rawCol = mongoDb.collection(name);
             return new MongoCollectionRef(rawCol, name);
         },
-        runTransaction: async (updateFunction) => {
+
+        /**
+         * Firestore-compatible runTransaction.
+         * Emulates Firestore transaction semantics with sequential read-then-write.
+         * Safe for single-document updates in low-concurrency scenarios.
+         */
+        async runTransaction(updateFn) {
+            const pendingUpdates = [];
             const tx = {
-                get: async (docRef) => await docRef.get(),
-                set: async (docRef, data, options) => await docRef.set(data, options),
-                update: async (docRef, data) => await docRef.update(data),
-                delete: async (docRef) => await docRef.delete()
-            };
-            return await updateFunction(tx);
-        },
-        batch: () => {
-            const ops = [];
-            return {
-                set(docRef, data, options) {
-                    ops.push(() => docRef.set(data, options));
-                    return this;
+                async get(docRef) {
+                    return docRef.get();
                 },
                 update(docRef, data) {
-                    ops.push(() => docRef.update(data));
-                    return this;
+                    pendingUpdates.push({ ref: docRef, data });
                 },
-                delete(docRef) {
-                    ops.push(() => docRef.delete());
-                    return this;
-                },
-                commit: async () => {
-                    for (const op of ops) await op();
+                set(docRef, data, options) {
+                    pendingUpdates.push({ ref: docRef, data, options, isSet: true });
                 }
             };
+            const result = await updateFn(tx);
+            for (const op of pendingUpdates) {
+                if (op.isSet) {
+                    await op.ref.set(op.data, op.options || {});
+                } else {
+                    await op.ref.update(op.data);
+                }
+            }
+            return result;
         }
     };
 }

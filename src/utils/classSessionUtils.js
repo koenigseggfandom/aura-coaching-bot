@@ -4,54 +4,67 @@ import { getFirestore } from '../database/connection.js';
 import { getLogChannel } from './channelUtils.js';
 
 /**
- * Sınıf tanımları. Discord ses kanalı ID'leri .env dosyasından okunur.
- * Paneldeki sınıf kayıtları (classId) bu tanımlarla eşleşir.
+ * Sınıf tanımları. Varsayılanlar .env'den gelir; paneldeki sınıf kayıtları (classConfig)
+ * watchClassConfig ile izlenip CLASS_DEFS üzerine uygulanır. Böylece panelden eklenen
+ * sınıf + Discord kanalı da bota yeniden başlatma olmadan ulaşır.
  */
-export const CLASS_DEFS = [
+const ENV_CLASS_DEFS = [
     { id: 'classA', code: 'A', name: 'A Sınıfı', envKey: 'CLASS_A_CHANNEL_ID' },
     { id: 'classB', code: 'B', name: 'B Sınıfı', envKey: 'CLASS_B_CHANNEL_ID' },
     { id: 'classC', code: 'C', name: 'C Sınıfı', envKey: 'CLASS_C_CHANNEL_ID' }
 ];
 
-export let dynamicClassDefs = [...CLASS_DEFS];
-
-export function updateDynamicClassDefs(classesObj) {
-    if (!classesObj) return;
-    const map = new Map();
-    CLASS_DEFS.forEach(d => map.set(d.id, { ...d }));
-
-    if (typeof classesObj === 'object') {
-        const entries = Array.isArray(classesObj) ? classesObj.map(c => [c.id, c]) : Object.entries(classesObj);
-        for (const [key, val] of entries) {
-            const existing = map.get(key) || {};
-            map.set(key, {
-                id: key,
-                code: val.code || existing.code || key.replace(/^class/, '').toUpperCase(),
-                name: val.name || existing.name || `${key} Sınıfı`,
-                channelId: val.channelId || (existing.envKey ? process.env[existing.envKey] : ''),
-                envKey: existing.envKey,
-                coach: val.coach || existing.coach || '',
-                description: val.description || existing.description || ''
-            });
-        }
-    }
-    dynamicClassDefs = Array.from(map.values());
-}
+let CLASS_DEFS = ENV_CLASS_DEFS.map((d) => ({ ...d, channelId: (process.env[d.envKey] || '').trim() }));
 
 /** Verilen Discord kanal ID'sinin hangi sınıfa ait olduğunu döndürür */
 export function getClassByChannelId(channelId) {
     if (!channelId) return null;
     const idStr = String(channelId);
-    for (const def of dynamicClassDefs) {
-        if (def.channelId && String(def.channelId).trim() === idStr) return def;
-        if (def.envKey && (process.env[def.envKey] || '').trim() === idStr) return def;
-    }
-    return null;
+    return CLASS_DEFS.find((d) => d.channelId && d.channelId === idStr) || null;
 }
 
 /** classId ("classA") ile sınıf tanımını döndürür */
 export function getClassById(classId) {
-    return dynamicClassDefs.find((d) => d.id === classId) || CLASS_DEFS.find((d) => d.id === classId) || null;
+    return CLASS_DEFS.find((d) => d.id === classId) || null;
+}
+
+/** Panelin classConfig dokümanını sınıf tanımlarına uygular (panelden gelen sınıflar önceliklidir). */
+export function applyClassConfig(config) {
+    if (!config || !config.classes) return;
+    const removed = new Set(Array.isArray(config.removedClasses) ? config.removedClasses : []);
+
+    const map = new Map();
+    ENV_CLASS_DEFS.filter((d) => !removed.has(d.id)).forEach((d) =>
+        map.set(d.id, { ...d, channelId: (process.env[d.envKey] || '').trim() })
+    );
+
+    const raw = config.classes;
+    const entries = Array.isArray(raw) ? raw.map((c) => [c && c.id, c]) : Object.entries(raw);
+    for (const [key, val] of entries) {
+        if (!key || !val || removed.has(key)) continue;
+        const envDef = map.get(key);
+        map.set(key, {
+            id: key,
+            code: val.code || (envDef && envDef.code) || key.replace(/^class_?/, '').toUpperCase().slice(0, 4) || 'CLS',
+            name: val.name || (envDef && envDef.name) || `${key} Sınıfı`,
+            channelId: String(val.channelId || (envDef && envDef.channelId) || '').trim(),
+            coach: val.coach || '',
+            description: val.description || ''
+        });
+    }
+
+    CLASS_DEFS = Array.from(map.values());
+    logger.info(`[Sınıf] ${CLASS_DEFS.length} sınıf tanımı aktif (panel + env).`);
+}
+
+/** classConfig dokümanunu izler; panelde sınıf eklenip kanal eşleştirildiğinde tanımlar güncellenir. */
+export function watchClassConfig(db) {
+    return db.collection('classConfig').doc('main').onSnapshot(
+        (doc) => {
+            if (doc.exists) applyClassConfig(doc.data());
+        },
+        (err) => logger.warn('[Sınıf] classConfig izlenemedi: ' + err.message)
+    );
 }
 
 // Haftalık program gün anahtarları (JS getDay(): 0=Pazar ... 6=Cumartesi)
@@ -69,49 +82,24 @@ function timeToMinutes(str) {
 }
 
 /**
- * Sınıf ses kanalı eşleştirmesini panele yayınlar ve dinamik sınıfları dinler.
+ * Sınıf ses kanalı eşleştirmesini panele yayınlar (panel Discord kanal adını gösterebilsin).
  */
 export async function publishClassConfig(db, guild) {
-    try {
-        // Dinamik sınıf değişikliklerini dinle
-        db.collection('classConfig').doc('main').onSnapshot((doc) => {
-            if (doc && doc.exists && doc.data()?.classes) {
-                updateDynamicClassDefs(doc.data().classes);
-                logger.info(`[Sınıf] Dinamik sınıf tanımları güncellendi (${dynamicClassDefs.length} sınıf).`);
-            }
-        });
-
-        // Mevcut config'i oku
-        const currentDoc = await db.collection('classConfig').doc('main').get();
-        const currentClasses = (currentDoc && currentDoc.exists && currentDoc.data()?.classes) || {};
-        updateDynamicClassDefs(currentClasses);
-
-        const classes = { ...currentClasses };
-        for (const def of dynamicClassDefs) {
-            const channelId = def.channelId || (def.envKey ? (process.env[def.envKey] || '').trim() : '');
-            if (!channelId) continue;
-            let channelName = def.channelName || null;
-            try {
-                const ch = guild
-                    ? (guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null)))
-                    : null;
-                if (ch) channelName = ch.name;
-            } catch (_) {}
-            classes[def.id] = {
-                ...(classes[def.id] || {}),
-                code: def.code,
-                name: def.name,
-                coach: def.coach || '',
-                channelId,
-                channelName
-            };
-        }
-
-        await db.collection('classConfig').doc('main').set({ classes, updatedAt: new Date() }, { merge: true });
-        logger.info('[Sınıf] Kanal eşleştirmesi panele yayınlandı.');
-    } catch (e) {
-        logger.warn('[Sınıf] publishClassConfig hatası: ' + e.message);
+    const classes = {};
+    for (const def of CLASS_DEFS) {
+        const channelId = def.channelId;
+        if (!channelId) continue;
+        let channelName = null;
+        try {
+            const ch = guild
+                ? (guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null)))
+                : null;
+            channelName = ch ? ch.name : null;
+        } catch (_) {}
+        classes[def.id] = { channelId, channelName };
     }
+    await db.collection('classConfig').doc('main').set({ classes, updatedAt: new Date() }, { merge: true });
+    logger.info('[Sınıf] Kanal eşleştirmesi panele yayınlandı.');
 }
 
 
@@ -129,8 +117,10 @@ function displayNameOf(data) {
 /**
  * Discord kullanıcı ID'sini Firestore'daki öğrenci kaydıyla eşleştirir.
  * Önce registrations haritası, sonra students alanları denenir.
+ * Web formundan gelen öğrencilerde discord alanı kullanıcı adı olabildiği için
+ * username ile de aranır.
  */
-export async function findStudentByDiscordId(db, discordId) {
+export async function findStudentByDiscordId(db, discordId, username = null) {
     const id = String(discordId);
 
     try {
@@ -159,6 +149,14 @@ export async function findStudentByDiscordId(db, discordId) {
 
         const byMention = await db.collection('students').where('discord', '==', `<@${id}>`).limit(1).get();
         if (!byMention.empty) return byMention.docs[0];
+
+        if (username) {
+            const byUsername = await db.collection('students').where('discordUsername', '==', username).limit(1).get();
+            if (!byUsername.empty) return byUsername.docs[0];
+
+            const byDiscordName = await db.collection('students').where('discord', '==', username).limit(1).get();
+            if (!byDiscordName.empty) return byDiscordName.docs[0];
+        }
     } catch (e) {
         logger.warn('[Sınıf] students aramasında hata: ' + e.message);
     }
