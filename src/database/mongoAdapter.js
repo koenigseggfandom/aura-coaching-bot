@@ -18,8 +18,8 @@ function buildIdFilter(id) {
 }
 
 /**
- * Formats a raw MongoDB document into a Firestore-like document snapshot.
- * If collection is provided, attaches a .ref property for Firestore compat.
+ * Ham MongoDB belgesini panelin beklediği belge anlık görüntüsü biçimine çevirir.
+ * Koleksiyon verilmişse, çağıranların snap.ref.update(...) yapabilmesi için ref eklenir.
  */
 function formatDocSnapshot(rawDoc, collection) {
     if (!rawDoc) {
@@ -49,7 +49,7 @@ function formatDocSnapshot(rawDoc, collection) {
 }
 
 /**
- * Query builder that mimics Firestore's Query interface
+ * Panelin kullandığı zincirlenebilir sorgu arayüzü
  */
 class MongoQueryBuilder {
     constructor(collection, filters = {}, sortObj = {}, limitCount = 0) {
@@ -113,7 +113,7 @@ class MongoQueryBuilder {
 }
 
 /**
- * Document reference that mimics Firestore's DocumentReference interface
+ * Tekil belge referansı (get/set/update/delete)
  */
 class MongoDocRef {
     constructor(collection, docId) {
@@ -192,7 +192,7 @@ class MongoDocRef {
 }
 
 /**
- * Collection reference that mimics Firestore's CollectionReference interface
+ * Koleksiyon referansı (sorgu + belge ekleme)
  */
 class MongoCollectionRef extends MongoQueryBuilder {
     constructor(collection, name) {
@@ -201,7 +201,7 @@ class MongoCollectionRef extends MongoQueryBuilder {
     }
 
     doc(id) {
-        // If no id given, generate one (Firestore compat for auto-IDs)
+        // Kimlik verilmediyse otomatik üret
         if (id === undefined || id === null) {
             const newId = new ObjectId().toHexString();
             return new MongoDocRef(this.collection, newId);
@@ -276,9 +276,9 @@ class MongoCollectionRef extends MongoQueryBuilder {
 }
 
 /**
- * Creates the Firestore-compatible adapter over MongoDB
+ * MongoDB üzerine panel arayüzünü sağlayan bağdaştırıcıyı kurar
  */
-export function createMongoFirestoreAdapter(mongoDb) {
+export function createPanelDbAdapter(mongoDb) {
     return {
         collection: (name) => {
             const rawCol = mongoDb.collection(name);
@@ -286,9 +286,8 @@ export function createMongoFirestoreAdapter(mongoDb) {
         },
 
         /**
-         * Firestore-compatible runTransaction.
-         * Emulates Firestore transaction semantics with sequential read-then-write.
-         * Safe for single-document updates in low-concurrency scenarios.
+         * İşlem (transaction) taklidi: okumalar önce, yazmalar sırayla ve tek seferde uygulanır.
+         * Düşük eşzamanlılıkta tekil belge güncellemeleri için güvenli.
          */
         async runTransaction(updateFn) {
             const pendingUpdates = [];

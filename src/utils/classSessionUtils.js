@@ -1,7 +1,8 @@
 import { EmbedBuilder } from 'discord.js';
 import { logger } from './logger.js';
-import { getFirestore } from '../database/connection.js';
+import { getDatabase } from '../database/connection.js';
 import { getLogChannel } from './channelUtils.js';
+import { readStudentLink } from './studentLink.js';
 
 /**
  * Sınıf tanımları. Varsayılanlar .env'den gelir; paneldeki sınıf kayıtları (classConfig)
@@ -115,7 +116,7 @@ function displayNameOf(data) {
 }
 
 /**
- * Discord kullanıcı ID'sini Firestore'daki öğrenci kaydıyla eşleştirir.
+ * Discord kullanıcı ID'sini veritabanındaki öğrenci kaydıyla eşleştirir.
  * Önce registrations haritası, sonra students alanları denenir.
  * Web formundan gelen öğrencilerde discord alanı kullanıcı adı olabildiği için
  * username ile de aranır.
@@ -130,9 +131,9 @@ export async function findStudentByDiscordId(db, discordId, username = null, dis
             .limit(1)
             .get();
         if (!regSnap.empty) {
-            const firestoreStudentId = regSnap.docs[0].data().firestoreStudentId;
-            if (firestoreStudentId) {
-                const doc = await db.collection('students').doc(firestoreStudentId).get();
+            const linkedId = readStudentLink(regSnap.docs[0].data());
+            if (linkedId) {
+                const doc = await db.collection('students').doc(linkedId).get();
                 if (doc.exists) return doc;
             }
         }
@@ -353,7 +354,7 @@ export async function createClassSession(db, classDef, channel, starterDoc, guil
     return payload;
 }
 
-/** Oturum katılımcı bilgisini Firestore'a yazar (ders devam ederken panel görebilsin) */
+/** Oturum katılımcı bilgisini veritabanına yazar (ders devam ederken panel görebilsin) */
 export async function persistSessionParticipants(db, session) {
     try {
         await db.collection('classSessions').doc(session.sessionId).update({
@@ -365,12 +366,98 @@ export async function persistSessionParticipants(db, session) {
     }
 }
 
+/** Sayısal olmayan / boş değerleri boş diziye çevirir */
+function normalizeIdValue(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).trim();
+}
+
+/** Türkçe karakterleri sadeleştirip isim karşılaştırılabilir hale getirir */
+function normalizeName(v) {
+    if (!v) return '';
+    return String(v)
+        .toLowerCase()
+        .replace(/ı/g, 'i').replace(/İ/g, 'i')
+        .replace(/ş/g, 's').replace(/Ş/g, 's')
+        .replace(/ğ/g, 'g').replace(/Ğ/g, 'g')
+        .replace(/ü/g, 'u').replace(/Ü/g, 'u')
+        .replace(/ö/g, 'o').replace(/Ö/g, 'o')
+        .replace(/ç/g, 'c').replace(/Ç/g, 'c')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * İki Discord kimliğini karşılaştırır. Sayısal ID, <@12345> mention veya
+ * kullanıcı adı karışabiliyor olduğu için esnek karşılaştırma yapılır.
+ */
+function idsMatch(a, b) {
+    const A = normalizeIdValue(a);
+    const B = normalizeIdValue(b);
+    if (!A || !B) return false;
+    if (A === B) return true;
+    // <@123456789> biçimindeki mention içinden sayısal ID'yi çıkar
+    const num = (s) => {
+        const m = s.match(/(\d{5,})/);
+        return m ? m[1] : '';
+    };
+    const na = num(A);
+    const nb = num(B);
+    return !!(na && nb && na === nb);
+}
+
+/**
+ * Oturum katılımcısını esnek şekilde bulur:
+ * 1) studentId eşleşmesi
+ * 2) discordId eşleşmesi (sayısal ID / mention / kullanıcı adı)
+ * 3) isim eşleşmesi (aynı kişi için iki ayrı öğrenci kaydı olabildiğinden)
+ */
+export function findSessionParticipant(session, discordId, studentId, extra = {}) {
+    const participants = session.participants || [];
+
+    if (studentId) {
+        const byId = participants.find((x) => x.studentId === studentId);
+        if (byId) return byId;
+    }
+
+    if (discordId) {
+        const byDiscord = participants.find((x) => idsMatch(x.discordId, discordId));
+        if (byDiscord) return byDiscord;
+    }
+
+    // İsim eşleşmesi: öğrencinin kaydı (registrations) farklı bir dokümana
+    // işaret edebildiği için katılımcı ismiyle de aranır.
+    const nameTarget = normalizeName(extra.name || extra.displayName || '');
+    if (nameTarget) {
+        const byName = participants.find((x) => normalizeName(x.name) === nameTarget);
+        if (byName) return byName;
+    }
+
+    return null;
+}
+
 /** Kanal katılımını işaretler. Oturumda olmayan (sonradan eklenen) öğrenci dahil edilmez. */
-export function markParticipantJoined(session, discordId, studentId) {
-    const p = session.participants.find(
-        (x) => x.studentId === studentId || (x.discordId && x.discordId === String(discordId))
-    );
-    if (!p) return false;
+export function markParticipantJoined(session, discordId, studentId, extra = {}) {
+    const participants = session.participants || [];
+    const p = findSessionParticipant(session, discordId, studentId, extra);
+
+    if (!p) {
+        logger.warn(
+            `[Sınıf] Katılım işaretlenemedi: ${extra.tag || discordId || studentId} oturum ` +
+            `katılımcıları arasında bulunamadı. Oturum: ${session.sessionId} (${session.className}). ` +
+            `Aranan studentId: ${studentId || '-'} | discordId: ${discordId || '-'} | isim: ${extra.name || extra.displayName || '-'}. ` +
+            `Katılımcılar: ${participants
+                .map((x) => `${x.name} [id=${x.studentId}, discordId=${x.discordId || 'yok'}]`)
+                .join(', ') || 'yok'}`
+        );
+        return false;
+    }
+
+    // Katılımcı kaydındaki discordId eksik/yanlışsa gerçek Discord ID'siyle düzelt
+    if (discordId && !idsMatch(p.discordId, discordId)) {
+        p.discordId = String(discordId);
+    }
+
     if (p.attended === true) return false;
     p.attended = true;
     p.joinedAt = Date.now();
@@ -378,15 +465,20 @@ export function markParticipantJoined(session, discordId, studentId) {
 }
 
 /** Kanal ayrılış zamanını kaydeder */
-export function markParticipantLeft(session, discordId, studentId) {
-    const p = session.participants.find(
-        (x) => (studentId && x.studentId === studentId) || (x.discordId && x.discordId === String(discordId))
-    );
-    if (!p) return false;
+export function markParticipantLeft(session, discordId, studentId, extra = {}) {
+    const p = findSessionParticipant(session, discordId, studentId, extra);
+
+    if (!p) {
+        logger.warn(
+            `[Sınıf] Ayrılış kaydedilemedi: ${extra.tag || discordId} oturum katılımcıları ` +
+            `arasında bulunamadı. Oturum: ${session.sessionId} (${session.className}).`
+        );
+        return false;
+    }
+
     p.leftAt = Date.now();
     return true;
 }
-
 /**
  * Tek bir öğrenciden sınıf dersi hakkını düşer ve ders geçmişine işler.
  * Katılım bilgisi (attended) ile düşüm aynı transaction içinde yapılır.
@@ -601,4 +693,4 @@ export async function completeClassSession(db, session, guild) {
     return { attendedList, absentList, deductedCount, minutes };
 }
 
-export { getFirestore };
+export { getDatabase };

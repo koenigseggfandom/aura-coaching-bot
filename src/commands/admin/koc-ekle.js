@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
-import { getFirestore } from '../../database/connection.js';
+import { getDatabase } from '../../database/connection.js';
 import { logger } from '../../utils/logger.js';
 
 export default {
@@ -27,7 +27,7 @@ export default {
         const specialty = interaction.options.getString('uzmanlik') || 'Genel';
 
         try {
-            const db = getFirestore();
+            const db = getDatabase();
 
             const docRef = await db.collection('coaches').add({
                 fullName: name,

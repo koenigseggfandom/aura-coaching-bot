@@ -12,12 +12,13 @@ Bu bot Railway üzerinde 7/24 aktif çalışacak şekilde yapılandırılmışt�
    - `GUILD_ID`
    - `STUDENT_ROLE_ID`
    - `COACH_ROLE_ID`
-   - `FIREBASE_PROJECT_ID`
-   - `FIREBASE_PRIVATE_KEY`
-   - `FIREBASE_CLIENT_EMAIL`
+   - `MONGO_URL`
+   - `MONGO_DB_NAME`
+   - `CLASS_A_CHANNEL_ID` / `CLASS_B_CHANNEL_ID` / `CLASS_C_CHANNEL_ID`
+   - `LOGS_CHANNEL_ID`
    - vb.
 
-**Önemli:** `FIREBASE_PRIVATE_KEY` değerini Railway'e eklerken tırnak işaretleri olmadan ve `\n` karakterlerini koruyarak yapıştırın.
+**Önemli:** `MONGO_URL` değerini eklerken tırnak işaretleri olmadan ve boşluk bırakmadan yapıştırın.
 
 ## Botu Başlatma
 Railway dosyaları algıladığında `npm start` komutuyla botu otomatik olarak başlatacaktır.

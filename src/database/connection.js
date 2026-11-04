@@ -1,6 +1,6 @@
 import { MongoClient } from 'mongodb';
 import { logger } from '../utils/logger.js';
-import { createMongoFirestoreAdapter } from './mongoAdapter.js';
+import { createPanelDbAdapter } from './mongoAdapter.js';
 
 let db;
 let mongoClient;
@@ -36,12 +36,12 @@ export async function connectDatabase() {
     let dbName = process.env.MONGO_DB_NAME || 'aura_database';
 
     const mongoDb = mongoClient.db(dbName);
-    db = createMongoFirestoreAdapter(mongoDb);
+    db = createPanelDbAdapter(mongoDb);
     logger.info(`✅ MongoDB veritabanı bağlantısı kuruldu (db: ${dbName})`);
     return db;
 }
 
-export function getFirestore() {
+export function getDatabase() {
     if (!db) {
         throw new Error('Veritabanı henüz bağlanmadı! connectDatabase() çağırın.');
     }

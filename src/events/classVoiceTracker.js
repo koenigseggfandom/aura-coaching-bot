@@ -1,6 +1,6 @@
 import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
-import { getFirestore } from '../database/connection.js';
+import { getDatabase } from '../database/connection.js';
 import {
     getClassByChannelId,
     getClassById,
@@ -8,6 +8,7 @@ import {
     createClassSession,
     getActiveClassSession,
     completeClassSession,
+    findSessionParticipant,
     markParticipantJoined,
     markParticipantLeft,
     persistSessionParticipants
@@ -98,11 +99,57 @@ export async function handleClassJoin(member, channel, guild, db, explicitClassD
 
     const session = await ensureSession(db, classDef, channel, studentDoc, guild);
 
-    const changed = markParticipantJoined(session, member.id, studentDoc.id);
-    if (changed) await persistSessionParticipants(db, session);
+    const extra = {
+        name: studentDisplayName(studentData),
+        displayName: member.displayName,
+        tag: member.user.tag
+    };
+
+    const changed = markParticipantJoined(session, member.id, studentDoc.id, extra);
+    let rosterHealed = false;
+
+    // Kök neden onarımı: sınıf kadrosundaki (students) kaydın discordId alanı
+    // gerçek sayısal Discord ID'si değilse (kullanıcı adı/boş yazılmış) doğru ID ile güncelle.
+    const participant = findSessionParticipant(session, member.id, studentDoc.id, extra);
+    if (participant && participant.studentId) {
+        try {
+            const rosterRef = db.collection('students').doc(participant.studentId);
+            const rosterSnap = await rosterRef.get();
+            if (rosterSnap.exists) {
+                const rosterData = rosterSnap.data() || {};
+                const currentId = String(rosterData.discordId || '').trim();
+                const memberId = String(member.id);
+
+                if (currentId !== memberId) {
+                    const isNumericId = /^\d{5,}$/.test(currentId);
+                    if (!isNumericId) {
+                        await rosterRef.update({ discordId: memberId, updatedAt: new Date() });
+                        logger.warn(
+                            `[Sınıf] ${participant.name} kaydındaki discordId gerçek Discord ID'si ile ` +
+                            `güncellendi (önceki değer: ${currentId || 'boş'}).`
+                        );
+                        rosterHealed = true;
+                    } else {
+                        logger.warn(
+                            `[Sınıf] ${participant.name} kaydında farklı bir sayısal discordId var ` +
+                            `(${currentId}), dokunulmadı. Gelen hesap: ${memberId} (${member.user.tag}).`
+                        );
+                    }
+                }
+            }
+        } catch (e) {
+            logger.warn('[Sınıf] discordId düzeltmesi yazılamadı: ' + e.message);
+        }
+    }
+
+    if (changed || rosterHealed) await persistSessionParticipants(db, session);
 
     clearGrace(classDef.id);
-    logger.info(`[Sınıf] ${studentDisplayName(studentData)} (${member.user.tag}) ${classDef.name} dersine katıldı.`);
+
+    // "dersine katıldı" kaydı yalnızca katılım gerçekten işaretlendiğinde yazılır
+    if (changed) {
+        logger.info(`[Sınıf] ${studentDisplayName(studentData)} (${member.user.tag}) ${classDef.name} dersine katıldı.`);
+    }
 }
 
 export async function handleClassLeave(member, channel, guild, db, explicitClassDef = null) {
@@ -114,7 +161,10 @@ export async function handleClassLeave(member, channel, guild, db, explicitClass
 
     logger.info(`[Sınıf] ${member.displayName || member.user.tag} (${classDef.name}) dersten ayrıldı.`);
 
-    const changed = markParticipantLeft(session, member.id);
+    const changed = markParticipantLeft(session, member.id, null, {
+        name: member.displayName,
+        tag: member.user.tag
+    });
     if (changed) await persistSessionParticipants(db, session);
 
     // Kanalda bot olmayan başka üye var mı? Varsa ders devam ediyor.
@@ -155,7 +205,7 @@ export async function handleClassLeave(member, channel, guild, db, explicitClass
  */
 export async function initClassSessions(client) {
     try {
-        const db = getFirestore();
+        const db = getDatabase();
         const snap = await db.collection('classSessions').where('status', '==', 'active').get();
         if (snap.empty) return;
 
@@ -174,7 +224,10 @@ export async function initClassSessions(client) {
             const liveMembers = channel.members.filter((m) => !m.user.bot);
             if (liveMembers.size > 0) {
                 for (const m of liveMembers.values()) {
-                    markParticipantJoined(session, m.id, null);
+                    markParticipantJoined(session, m.id, null, {
+                        displayName: m.displayName,
+                        tag: m.user.tag
+                    });
                 }
                 await persistSessionParticipants(db, session);
                 classSessions.set(classDef.id, session);
@@ -205,7 +258,7 @@ export default {
         const leftClass = oldChannel ? getClassDefForChannel(oldChannel.id) : null;
         if (!joinedClass && !leftClass) return;
 
-        const db = getFirestore();
+        const db = getDatabase();
 
         try {
             if (joinedClass) {

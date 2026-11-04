@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
-import { getFirestore } from '../../database/connection.js';
+import { getDatabase } from '../../database/connection.js';
 import { logger } from '../../utils/logger.js';
+import { STUDENT_LINK_FIELD } from '../../utils/studentLink.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -32,7 +33,7 @@ export default {
         const packageName = interaction.options.getString('paket-adi') || 'Manuel Kayıt';
 
         try {
-            const db = getFirestore();
+            const db = getDatabase();
 
             // Check for duplicate by discordId
             const existing = await db.collection('students')
@@ -73,7 +74,7 @@ export default {
 
             // Also create a registration record for bot-student linking
             await db.collection('registrations').add({
-                firestoreStudentId: docRef.id,
+                [STUDENT_LINK_FIELD]: docRef.id,
                 studentId: user.id,
                 studentTag: user.tag,
                 packageType: packageName,

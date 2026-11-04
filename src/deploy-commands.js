@@ -25,7 +25,19 @@ for (const folder of commandFolders) {
     }
 }
 
-const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+const rest = new REST().setToken(normalizeToken(process.env.DISCORD_TOKEN));
+
+/** Yapıştırma sırasında başına karışan "DISCORD_TOKEN=", tırnak ve "Bot " öneklerini temizler. */
+function normalizeToken(token) {
+    if (!token) return '';
+    let t = String(token).trim();
+    if (t.includes('=')) t = t.split('=').pop().trim();
+    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+        t = t.slice(1, -1).trim();
+    }
+    if (t.startsWith('Bot ')) t = t.slice(4).trim();
+    return t;
+}
 
 (async () => {
     try {

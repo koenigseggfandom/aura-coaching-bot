@@ -1,12 +1,12 @@
 import { EmbedBuilder } from 'discord.js';
-import { getFirestore } from '../database/connection.js';
+import { getDatabase } from '../database/connection.js';
 import { logger } from '../utils/logger.js';
 
 let applicationChannelId = null;
 const processedAppIds = new Set();
 
 export async function startApplicationSync(client) {
-    const db = getFirestore();
+    const db = getDatabase();
     
     logger.info('[Sync] Başvuru senkronizasyonu başlatıldı.');
 

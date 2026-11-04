@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
-import { getFirestore } from '../../database/connection.js';
+import { getDatabase } from '../../database/connection.js';
+import { readStudentLink } from '../../utils/studentLink.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -8,7 +9,7 @@ export default {
     async execute(interaction) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const db = getFirestore();
+        const db = getDatabase();
         const userId = interaction.user.id;
         const userTag = interaction.user.tag;
         const userName = interaction.user.username;
@@ -48,9 +49,9 @@ export default {
                     .limit(1)
                     .get();
                 if (!regSnap.empty) {
-                    const firestoreStudentId = regSnap.docs[0].data().firestoreStudentId;
-                    if (firestoreStudentId) {
-                        const doc = await db.collection('students').doc(firestoreStudentId).get();
+                    const linkedId = readStudentLink(regSnap.docs[0].data());
+                    if (linkedId) {
+                        const doc = await db.collection('students').doc(linkedId).get();
                         if (doc.exists) {
                             studentSnap = { empty: false, docs: [doc] };
                         }

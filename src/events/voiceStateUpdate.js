@@ -1,6 +1,6 @@
 import { Events, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
-import { getFirestore } from '../database/connection.js';
+import { getDatabase } from '../database/connection.js';
 import { getLogChannel } from '../utils/channelUtils.js';
 import { getClassByChannelId, getClassById, findStudentByDiscordId } from '../utils/classSessionUtils.js';
 import { handleClassJoin, handleClassLeave, hasSessionForChannel, getClassDefForChannel } from './classVoiceTracker.js';
@@ -93,7 +93,7 @@ async function endLesson(session, reason, guild, deductPackage = true) {
     const coachDisplayName = session.coachName || session.coachTag;
 
     try {
-        const db = getFirestore();
+        const db = getDatabase();
         
         await db.collection('lesson_history').add({
             coachId: session.coachId,
@@ -396,7 +396,7 @@ export default {
             if (coach && student) {
                 // Sınıf öğrencisi ise sınıf dersi oturumu başlatılır
                 try {
-                    const db = getFirestore();
+                    const db = getDatabase();
                     const sDoc = await findStudentByDiscordId(db, student.id, student.user?.username, student.displayName);
                     if (sDoc && sDoc.data()?.classId) {
                         const classId = sDoc.data().classId;

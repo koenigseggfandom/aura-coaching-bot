@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, MessageFlags } from 'discord.js';
-import { getFirestore } from '../../database/connection.js';
+import { getDatabase } from '../../database/connection.js';
 import { logger } from '../../utils/logger.js';
 
 export default {
@@ -18,7 +18,7 @@ export default {
         const channel = interaction.options.getChannel('kanal');
 
         try {
-            const db = getFirestore();
+            const db = getDatabase();
 
             await db.collection('settings').doc('announcements').set({
                 applicationChannelId: channel.id,

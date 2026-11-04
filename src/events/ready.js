@@ -3,7 +3,7 @@ import { logger } from '../utils/logger.js';
 import { startStudentSync } from './studentSync.js';
 import { startApplicationSync } from './applicationSync.js';
 import { initClassSessions } from './classVoiceTracker.js';
-import { publishClassConfig, watchClassConfig, getFirestore } from '../utils/classSessionUtils.js';
+import { publishClassConfig, watchClassConfig, getDatabase } from '../utils/classSessionUtils.js';
 
 export default {
     name: Events.ClientReady,
@@ -11,7 +11,7 @@ export default {
     async execute(client) {
         logger.info(`✅ Bot ${client.user.tag} olarak hazır!`);
         
-        // Firestore senkronizasyonlarını başlat
+        // Veritabanı senkronizasyonlarını başlat
         setTimeout(() => {
             startStudentSync(client);
             startApplicationSync(client);
@@ -20,7 +20,7 @@ export default {
         // Panelde tanımlı sınıfları (classConfig) izle: sınıf eklenip kanal eşleştirildiğinde
         // ses kanalı takibi otomatik devreye girer
         setTimeout(() => {
-            watchClassConfig(getFirestore());
+            watchClassConfig(getDatabase());
         }, 2500);
 
         // Sınıf ders oturumlarını kontrol et (bot yeniden başlatıldıysa)
@@ -31,7 +31,7 @@ export default {
         // Sınıf ses kanalı eşleştirmesini panele yayınla
         setTimeout(() => {
             const guild = client.guilds.cache.first();
-            publishClassConfig(getFirestore(), guild).catch((e) =>
+            publishClassConfig(getDatabase(), guild).catch((e) =>
                 logger.warn('[Sınıf] Kanal eşleştirmesi yayınlanamadı: ' + e.message)
             );
         }, 4000);

@@ -1,13 +1,14 @@
-import { getFirestore } from '../database/connection.js';
+import { getDatabase } from '../database/connection.js';
 import { logger } from '../utils/logger.js';
+import { findRegistrationsByStudentLink } from '../utils/studentLink.js';
 
 const processedStudentIds = new Set();
 let studentsUnsubscribe = null;
 
 export function startStudentSync(client) {
-    const db = getFirestore();
+    const db = getDatabase();
     
-    logger.info('[Sync] Firestore öğrenci senkronizasyonu başlatıldı.');
+    logger.info('[Sync] Öğrenci senkronizasyonu başlatıldı.');
 
     async function handleRemovedStudent(client, studentId, data) {
         try {
@@ -20,7 +21,7 @@ export function startStudentSync(client) {
             if (!member.roles.cache.has(role.id)) return;
 
             await member.roles.remove(role);
-            logger.info(`[Sync] Öğrenci Firestore'dan silindi, rol geri alındı: ${member.user.tag} -> ${data.fullName || studentId}`);
+            logger.info(`[Sync] Öğrenci veritabanından silindi, rol geri alındı: ${member.user.tag} -> ${data.fullName || studentId}`);
         } catch (e) {
             logger.error(`[Sync] removed hatası: ${e.message}`);
         }
@@ -41,13 +42,13 @@ export function startStudentSync(client) {
                     await handleStudentUpdate(client, id, data);
                 } else if (change.type === 'removed') {
                     processedStudentIds.delete(id);
-                    logger.info(`[Sync] Öğrenci silindi (Firestore): ${data?.fullName || id}`);
+                    logger.info(`[Sync] Öğrenci silindi (veritabanı): ${data?.fullName || id}`);
                     handleRemovedStudent(client, id, data || {});
                 }
             });
         },
         (err) => {
-            logger.error('[Sync] Firestore snapshot hatası: ' + err.message);
+            logger.error('[Sync] Veritabanı izleme hatası: ' + err.message);
             setTimeout(() => startStudentSync(client), 5000);
         }
     );
@@ -112,13 +113,9 @@ async function handleStudentUpdate(client, studentId, data) {
         if (isActive && !member.roles.cache.has(role.id)) {
             await member.roles.add(role);
             
-            const db = getFirestore();
-            const snap = await db.collection('registrations')
-                .where('firestoreStudentId', '==', studentId)
-                .limit(1)
-                .get()
-                .catch(() => ({ empty: true }));
-            const isReactivation = !snap.empty;
+            const db = getDatabase();
+            const linkedRegs = await findRegistrationsByStudentLink(db, studentId);
+            const isReactivation = linkedRegs.length > 0;
             
             if (!isReactivation) {
                 logWelcome(data, member.user.tag);
