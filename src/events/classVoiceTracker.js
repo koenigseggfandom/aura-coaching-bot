@@ -60,7 +60,7 @@ async function handleClassJoin(member, channel, guild, db) {
     const classDef = getClassByChannelId(channel.id);
     if (!classDef) return;
 
-    const studentDoc = await findStudentByDiscordId(db, member.id, member.user.username);
+    const studentDoc = await findStudentByDiscordId(db, member.id, member.user.username, member.displayName);
     if (!studentDoc) {
         logger.info(`[Sınıf] #${channel.name}: ${member.user.tag} sistemde kayıtlı öğrenci değil, yok sayıldı.`);
         return;

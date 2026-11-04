@@ -120,7 +120,7 @@ function displayNameOf(data) {
  * Web formundan gelen öğrencilerde discord alanı kullanıcı adı olabildiği için
  * username ile de aranır.
  */
-export async function findStudentByDiscordId(db, discordId, username = null) {
+export async function findStudentByDiscordId(db, discordId, username = null, displayName = null) {
     const id = String(discordId);
 
     try {
@@ -157,6 +157,23 @@ export async function findStudentByDiscordId(db, discordId, username = null) {
             const byDiscordName = await db.collection('students').where('discord', '==', username).limit(1).get();
             if (!byDiscordName.empty) return byDiscordName.docs[0];
         }
+
+        // Geniş eşleşme (büyük/küçük harf duyarsız ve isim desteği)
+        const allSnap = await db.collection('students').get();
+        const uClean = username ? username.toLowerCase().trim() : '';
+        const dClean = displayName ? displayName.toLowerCase().trim() : '';
+
+        for (const doc of allSnap.docs) {
+            const d = doc.data() || {};
+            const sid = String(d.discordId || d.botStudentId || '').trim();
+            if (sid && sid === id) return doc;
+
+            const target = String(d.discord || d.discordUsername || '').toLowerCase().trim();
+            if (!target) continue;
+            if (target === id) return doc;
+            if (uClean && (target === uClean || target === `@${uClean}`)) return doc;
+            if (dClean && target === dClean) return doc;
+        }
     } catch (e) {
         logger.warn('[Sınıf] students aramasında hata: ' + e.message);
     }
@@ -164,10 +181,12 @@ export async function findStudentByDiscordId(db, discordId, username = null) {
     return null;
 }
 
-/** Sınıfa atanmış tüm öğrenci kayıtlarını döndürür */
+/** Sınıfa atanmış tüm aktif öğrenci kayıtlarını döndürür */
 export async function getClassStudents(db, classId) {
     const snap = await db.collection('students').where('classId', '==', classId).get();
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((s) => s.isActive !== false && s.status !== 'passive');
 }
 
 /** Sınıf için aktif (devam eden) bir oturum var mı? */

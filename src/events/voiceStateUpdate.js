@@ -2,7 +2,7 @@ import { Events, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getFirestore } from '../database/connection.js';
 import { getLogChannel } from '../utils/channelUtils.js';
-import { getClassByChannelId } from '../utils/classSessionUtils.js';
+import { getClassByChannelId, findStudentByDiscordId } from '../utils/classSessionUtils.js';
 
 const activeLessons = new Map();
 const GRACE_PERIOD = 15 * 60 * 1000;
@@ -393,6 +393,16 @@ export default {
             const student = members.find(m => isStudent(m) && m.id !== coach?.id);
 
             if (coach && student) {
+                // Sınıf öğrencisi ise bireysel ders başlatılmaz (sınıf dersleri ayrı takip edilir)
+                try {
+                    const db = getFirestore();
+                    const sDoc = await findStudentByDiscordId(db, student.id, student.user?.username);
+                    if (sDoc && sDoc.data()?.classId) {
+                        logger.info(`[Lesson] ${student.displayName || student.user?.tag} bir sınıfa atanmış (${sDoc.data().classId}), bireysel ders başlatılmadı.`);
+                        return;
+                    }
+                } catch (_) {}
+
                 // Önceden bu koç veya öğrencinin başka bir kanalda aktif dersi var mıydı kontrol et
                 const prevSession = findActiveSessionForMember(coach.id) || findActiveSessionForMember(student.id);
 
