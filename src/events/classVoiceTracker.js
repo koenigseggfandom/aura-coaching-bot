@@ -17,9 +17,29 @@ import {
 const GRACE_PERIOD = 3 * 60 * 1000;
 
 // classId -> oturum (bellek içi)
-const classSessions = new Map();
+export const classSessions = new Map();
 // classId -> grace timeout
-const graceTimers = new Map();
+export const graceTimers = new Map();
+
+export function hasSessionForChannel(channelId) {
+    if (!channelId) return false;
+    for (const sess of classSessions.values()) {
+        if (sess && sess.channelId === String(channelId)) return true;
+    }
+    return false;
+}
+
+export function getClassDefForChannel(channelId) {
+    if (!channelId) return null;
+    const def = getClassByChannelId(channelId);
+    if (def) return def;
+    for (const [cId, sess] of classSessions.entries()) {
+        if (sess && sess.channelId === String(channelId)) {
+            return getClassById(cId) || { id: cId, name: sess.className || cId };
+        }
+    }
+    return null;
+}
 
 function studentDisplayName(data) {
     if (!data) return 'İsimsiz';
@@ -37,7 +57,7 @@ function clearGrace(classId) {
 /**
  * Kesin bir aktif oturumu belleğe alır. Yoksa o sınıf için yeni oturum açar.
  */
-async function ensureSession(db, classDef, channel, studentDoc, guild) {
+export async function ensureSession(db, classDef, channel, studentDoc, guild) {
     let session = classSessions.get(classDef.id);
 
     if (!session) {
@@ -56,8 +76,8 @@ async function ensureSession(db, classDef, channel, studentDoc, guild) {
     return session;
 }
 
-async function handleClassJoin(member, channel, guild, db) {
-    const classDef = getClassByChannelId(channel.id);
+export async function handleClassJoin(member, channel, guild, db, explicitClassDef = null) {
+    const classDef = explicitClassDef || getClassByChannelId(channel.id);
     if (!classDef) return;
 
     const studentDoc = await findStudentByDiscordId(db, member.id, member.user.username, member.displayName);
@@ -68,7 +88,7 @@ async function handleClassJoin(member, channel, guild, db) {
 
     const studentData = studentDoc.data() || {};
 
-    if (studentData.classId !== classDef.id) {
+    if (studentData.classId && studentData.classId !== classDef.id) {
         logger.warn(
             `[Sınıf] ${studentDisplayName(studentData)} (${member.user.tag}) ${classDef.name} kanalında ama ` +
             `atanmış sınıfı "${studentData.classId || 'yok'}". Ders oturumu oluşturulmadı.`
@@ -82,14 +102,17 @@ async function handleClassJoin(member, channel, guild, db) {
     if (changed) await persistSessionParticipants(db, session);
 
     clearGrace(classDef.id);
+    logger.info(`[Sınıf] ${studentDisplayName(studentData)} (${member.user.tag}) ${classDef.name} dersine katıldı.`);
 }
 
-async function handleClassLeave(member, channel, guild, db) {
-    const classDef = getClassByChannelId(channel.id);
+export async function handleClassLeave(member, channel, guild, db, explicitClassDef = null) {
+    const classDef = explicitClassDef || getClassDefForChannel(channel.id);
     if (!classDef) return;
 
     const session = classSessions.get(classDef.id);
     if (!session) return;
+
+    logger.info(`[Sınıf] ${member.displayName || member.user.tag} (${classDef.name}) dersten ayrıldı.`);
 
     const changed = markParticipantLeft(session, member.id);
     if (changed) await persistSessionParticipants(db, session);
@@ -116,6 +139,7 @@ async function handleClassLeave(member, channel, guild, db) {
 
         classSessions.delete(classDef.id);
         await completeClassSession(db, current, guild);
+        logger.info(`[Sınıf] ${classDef.name} ders oturumu tamamlandı, tüm sınıf öğrencilerinin hakkı düşüldü.`);
     }, GRACE_PERIOD);
 
     graceTimers.set(classDef.id, timer);
@@ -176,19 +200,19 @@ export default {
         const newChannel = newState.channel;
         if (oldChannel?.id === newChannel?.id) return;
 
-        // Sadece sınıf ses kanallarındaki hareketlerle ilgilen
-        const joinedClass = newChannel ? getClassByChannelId(newChannel.id) : null;
-        const leftClass = oldChannel ? getClassByChannelId(oldChannel.id) : null;
+        // Sınıf ses kanallarındaki veya aktif bir sınıf oturumunun olduğu kanaldaki hareketler
+        const joinedClass = newChannel ? getClassDefForChannel(newChannel.id) : null;
+        const leftClass = oldChannel ? getClassDefForChannel(oldChannel.id) : null;
         if (!joinedClass && !leftClass) return;
 
         const db = getFirestore();
 
         try {
             if (joinedClass) {
-                await handleClassJoin(member, newChannel, guild, db);
+                await handleClassJoin(member, newChannel, guild, db, joinedClass);
             }
             if (leftClass && (!newChannel || newChannel.id !== oldChannel.id)) {
-                await handleClassLeave(member, oldChannel, guild, db);
+                await handleClassLeave(member, oldChannel, guild, db, leftClass);
             }
         } catch (e) {
             logger.error('[Sınıf] voiceStateUpdate hatası: ' + e.message);

@@ -2,7 +2,8 @@ import { Events, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getFirestore } from '../database/connection.js';
 import { getLogChannel } from '../utils/channelUtils.js';
-import { getClassByChannelId, findStudentByDiscordId } from '../utils/classSessionUtils.js';
+import { getClassByChannelId, getClassById, findStudentByDiscordId } from '../utils/classSessionUtils.js';
+import { handleClassJoin, handleClassLeave, hasSessionForChannel, getClassDefForChannel } from './classVoiceTracker.js';
 
 const activeLessons = new Map();
 const GRACE_PERIOD = 15 * 60 * 1000;
@@ -319,8 +320,8 @@ export default {
         const oldChannel = oldState.channel;
         const newChannel = newState.channel;
 
-        // Sınıf ses kanalları classVoiceTracker.js tarafından yönetilir.
-        if (getClassByChannelId(oldChannel?.id) || getClassByChannelId(newChannel?.id)) return;
+        // Sınıf ses kanalları veya aktif sınıf oturumları classVoiceTracker.js tarafından yönetilir.
+        if (getClassDefForChannel(oldChannel?.id) || getClassDefForChannel(newChannel?.id) || hasSessionForChannel(oldChannel?.id) || hasSessionForChannel(newChannel?.id)) return;
 
         if (oldChannel && (!newChannel || oldChannel.id !== newChannel.id)) {
             const session = activeLessons.get(oldChannel.id);
@@ -393,15 +394,25 @@ export default {
             const student = members.find(m => isStudent(m) && m.id !== coach?.id);
 
             if (coach && student) {
-                // Sınıf öğrencisi ise bireysel ders başlatılmaz (sınıf dersleri ayrı takip edilir)
+                // Sınıf öğrencisi ise sınıf dersi oturumu başlatılır
                 try {
                     const db = getFirestore();
-                    const sDoc = await findStudentByDiscordId(db, student.id, student.user?.username);
+                    const sDoc = await findStudentByDiscordId(db, student.id, student.user?.username, student.displayName);
                     if (sDoc && sDoc.data()?.classId) {
-                        logger.info(`[Lesson] ${student.displayName || student.user?.tag} bir sınıfa atanmış (${sDoc.data().classId}), bireysel ders başlatılmadı.`);
+                        const classId = sDoc.data().classId;
+                        const classDef = getClassById(classId) || {
+                            id: classId,
+                            code: classId.replace(/^class_?/, '').toUpperCase().slice(0, 4) || 'CLS',
+                            name: `${classId} Sınıfı`,
+                            channelId: newChannel.id
+                        };
+                        await handleClassJoin(student, newChannel, guild, db, classDef);
+                        logger.info(`[Sınıf Dersi] ${student.displayName || student.user?.tag} (${classDef.name}) koç ile derse girdi, sınıf oturumu aktifleştirildi.`);
                         return;
                     }
-                } catch (_) {}
+                } catch (e) {
+                    logger.error('[Sınıf Dersi] Başlatma hatası: ' + e.message);
+                }
 
                 // Önceden bu koç veya öğrencinin başka bir kanalda aktif dersi var mıydı kontrol et
                 const prevSession = findActiveSessionForMember(coach.id) || findActiveSessionForMember(student.id);
